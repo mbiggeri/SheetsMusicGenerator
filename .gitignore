@@ -1,0 +1,24 @@
+# Ambiente virtuale
+venv/
+.venv/
+env/
+*.env
+
+# File di Python compilati e cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# File di sistema
+.DS_Store
+Thumbs.db
+
+# File di configurazione sensibili (esempio)
+# config.ini
+# secrets.json
+
+# Altre dipendenze o build
+node_modules/
+build/
+dist/
