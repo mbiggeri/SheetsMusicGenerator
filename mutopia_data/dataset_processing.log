@@ -1,0 +1,191 @@
+2025-04-15 23:15:43,297 - INFO - Inizio elaborazione file locali per creazione dataset Mutopia.
+2025-04-15 23:15:43,297 - INFO - --- Fase 1: Elaborazione File Locali e Estrazione Metadati ---
+2025-04-15 23:15:43,625 - INFO - Trovati 1862 file MIDI locali in mutopia_data\midi_files da elaborare.
+2025-04-15 23:15:47,834 - WARNING -   File .ly corrispondente non trovato per AguadoOp4No3-1.mid, uso solo analisi MIDI.
+2025-04-15 23:15:48,081 - WARNING -   File .ly corrispondente non trovato per AguadoOp4No4-1.mid, uso solo analisi MIDI.
+2025-04-15 23:15:48,285 - WARNING -   File .ly corrispondente non trovato per AguadoOp4No5-1.mid, uso solo analisi MIDI.
+2025-04-15 23:15:49,976 - WARNING -   File .ly corrispondente non trovato per toccatina.mid, uso solo analisi MIDI.
+2025-04-15 23:15:52,537 - WARNING -   File .ly corrispondente non trovato per division-violin-two-27-1.mid, uso solo analisi MIDI.
+2025-04-15 23:16:11,751 - WARNING -   File .ly corrispondente non trovato per bach-air-jlh-35.mid, uso solo analisi MIDI.
+2025-04-15 23:16:11,952 - WARNING -   File .ly corrispondente non trovato per bach-air-jlh-40-organ.mid, uso solo analisi MIDI.
+2025-04-15 23:16:12,153 - WARNING -   File .ly corrispondente non trovato per bach-air-jlh-70.mid, uso solo analisi MIDI.
+2025-04-15 23:16:15,467 - WARNING -   File .ly corrispondente non trovato per contrapunctusI.mid, uso solo analisi MIDI.
+2025-04-15 23:16:30,880 - WARNING -   File .ly corrispondente non trovato per BachBMinorMass.mid, uso solo analisi MIDI.
+2025-04-15 23:16:47,109 - INFO - Elaborato 200/1862 file MIDI...
+2025-04-15 23:17:05,790 - WARNING -   File .ly corrispondente non trovato per bwv656.mid, uso solo analisi MIDI.
+2025-04-15 23:17:13,424 - WARNING -   File .ly corrispondente non trovato per bwv663.mid, uso solo analisi MIDI.
+2025-04-15 23:17:46,056 - WARNING -   File .ly corrispondente non trovato per bwv850a.mid, uso solo analisi MIDI.
+2025-04-15 23:17:46,288 - WARNING -   File .ly corrispondente non trovato per bwv850b.mid, uso solo analisi MIDI.
+2025-04-15 23:17:53,078 - WARNING -   File .ly corrispondente non trovato per bwv869b.mid, uso solo analisi MIDI.
+2025-04-15 23:18:09,290 - INFO - Elaborato 400/1862 file MIDI...
+2025-04-15 23:18:25,288 - WARNING -   File .ly corrispondente non trovato per Trio_op11_1.mid, uso solo analisi MIDI.
+2025-04-15 23:18:27,262 - WARNING -   File .ly corrispondente non trovato per Trio_op11_3.mid, uso solo analisi MIDI.
+2025-04-15 23:18:29,362 - WARNING -   File .ly corrispondente non trovato per lvb_sonate_111_1.mid, uso solo analisi MIDI.
+2025-04-15 23:18:34,694 - WARNING -   File .ly corrispondente non trovato per beethoven_rondo_op129.mid, uso solo analisi MIDI.
+2025-04-15 23:18:41,940 - WARNING -   File .ly corrispondente non trovato per Fuge_Opus137.mid, uso solo analisi MIDI.
+2025-04-15 23:18:42,523 - WARNING -   File .ly corrispondente non trovato per QuartetOpus18_No4_1.mid, uso solo analisi MIDI.
+2025-04-15 23:18:45,154 - WARNING -   File .ly corrispondente non trovato per QuartetOpus18_No4_2.mid, uso solo analisi MIDI.
+2025-04-15 23:18:46,951 - WARNING -   File .ly corrispondente non trovato per QuartetOpus18_No4_3.mid, uso solo analisi MIDI.
+2025-04-15 23:18:48,048 - WARNING -   File .ly corrispondente non trovato per QuartetOpus18_No4_4.mid, uso solo analisi MIDI.
+2025-04-15 23:18:50,927 - WARNING -   File .ly corrispondente non trovato per LVB_Sonate_02no1_2.mid, uso solo analisi MIDI.
+2025-04-15 23:18:54,073 - WARNING -   File .ly corrispondente non trovato per Violinsonata_No7_1.mid, uso solo analisi MIDI.
+2025-04-15 23:18:56,329 - WARNING -   File .ly corrispondente non trovato per Violinsonata_No7_4.mid, uso solo analisi MIDI.
+2025-04-15 23:19:01,257 - WARNING -   File .ly corrispondente non trovato per Concerto_No3.mid, uso solo analisi MIDI.
+2025-04-15 23:19:10,104 - WARNING -   File .ly corrispondente non trovato per Romanze_Opus40.mid, uso solo analisi MIDI.
+2025-04-15 23:19:11,754 - WARNING -   File .ly corrispondente non trovato per Violinsonata_No9_1.mid, uso solo analisi MIDI.
+2025-04-15 23:19:20,660 - WARNING -   File .ly corrispondente non trovato per Violinsonata_No9_3.mid, uso solo analisi MIDI.
+2025-04-15 23:19:28,645 - WARNING -   File .ly corrispondente non trovato per Romanze_Opus50.mid, uso solo analisi MIDI.
+2025-04-15 23:19:31,118 - WARNING -   File .ly corrispondente non trovato per LVB_Sonate_57_3.mid, uso solo analisi MIDI.
+2025-04-15 23:19:34,601 - WARNING -   File .ly corrispondente non trovato per Quartet_Opus_59No3_2.mid, uso solo analisi MIDI.
+2025-04-15 23:19:36,204 - WARNING -   File .ly corrispondente non trovato per violin_concerto_1.mid, uso solo analisi MIDI.
+2025-04-15 23:19:48,268 - WARNING -   File .ly corrispondente non trovato per violin_concerto_2.mid, uso solo analisi MIDI.
+2025-04-15 23:19:49,366 - WARNING -   File .ly corrispondente non trovato per violin_concerto_3.mid, uso solo analisi MIDI.
+2025-04-15 23:19:56,347 - WARNING -   File .ly corrispondente non trovato per variations_opus66.mid, uso solo analisi MIDI.
+2025-04-15 23:20:00,996 - WARNING -   File .ly corrispondente non trovato per beethoven_fifth_op67.mid, uso solo analisi MIDI.
+2025-04-15 23:20:06,089 - WARNING -   File .ly corrispondente non trovato per Symphony5_1.mid, uso solo analisi MIDI.
+2025-04-15 23:20:12,959 - WARNING -   File .ly corrispondente non trovato per Symphony5_2.mid, uso solo analisi MIDI.
+2025-04-15 23:20:18,367 - WARNING -   File .ly corrispondente non trovato per Cellosonata_No3_1.mid, uso solo analisi MIDI.
+2025-04-15 23:20:24,260 - WARNING -   File .ly corrispondente non trovato per Cellosonata_No3_2.mid, uso solo analisi MIDI.
+2025-04-15 23:20:26,824 - WARNING -   File .ly corrispondente non trovato per Cellosonata_No3_3.mid, uso solo analisi MIDI.
+2025-04-15 23:20:34,478 - WARNING -   File .ly corrispondente non trovato per Egmont.mid, uso solo analisi MIDI.
+2025-04-15 23:20:44,934 - WARNING -   File .ly corrispondente non trovato per Symphony7_1.mid, uso solo analisi MIDI.
+2025-04-15 23:21:09,713 - WARNING -   File .ly corrispondente non trovato per Symphony7_2.mid, uso solo analisi MIDI.
+2025-04-15 23:21:14,840 - WARNING -   File .ly corrispondente non trovato per marsch_woo29.mid, uso solo analisi MIDI.
+2025-04-15 23:21:23,842 - WARNING -   File .ly corrispondente non trovato per BrahmsHornTrio.mid, uso solo analisi MIDI.
+2025-04-15 23:21:49,163 - WARNING -   File .ly corrispondente non trovato per BuxWV69_score.mid, uso solo analisi MIDI.
+2025-04-15 23:21:51,744 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-15.mid, uso solo analisi MIDI.
+2025-04-15 23:21:51,852 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-19.mid, uso solo analisi MIDI.
+2025-04-15 23:21:51,987 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-22.mid, uso solo analisi MIDI.
+2025-04-15 23:21:58,163 - INFO - Elaborato 600/1862 file MIDI...
+2025-04-15 23:22:02,629 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-01.mid, uso solo analisi MIDI.
+2025-04-15 23:22:02,693 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-06.mid, uso solo analisi MIDI.
+2025-04-15 23:22:02,745 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-08.mid, uso solo analisi MIDI.
+2025-04-15 23:22:02,816 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-11.mid, uso solo analisi MIDI.
+2025-04-15 23:22:02,897 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-13.mid, uso solo analisi MIDI.
+2025-04-15 23:22:03,034 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-17.mid, uso solo analisi MIDI.
+2025-04-15 23:22:03,170 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-20.mid, uso solo analisi MIDI.
+2025-04-15 23:22:04,528 - WARNING -   File .ly corrispondente non trovato per ChabrierLarghetto.mid, uso solo analisi MIDI.
+2025-04-15 23:22:06,054 - WARNING -   File .ly corrispondente non trovato per chp-10-01.mid, uso solo analisi MIDI.
+2025-04-15 23:22:06,561 - WARNING -   File .ly corrispondente non trovato per chp-10-05.mid, uso solo analisi MIDI.
+2025-04-15 23:22:07,701 - WARNING -   File .ly corrispondente non trovato per chopin-op23-ballade-1.mid, uso solo analisi MIDI.
+2025-04-15 23:22:10,671 - WARNING -   File .ly corrispondente non trovato per PS-chopin-25-02.mid, uso solo analisi MIDI.
+2025-04-15 23:22:13,488 - WARNING -   File .ly corrispondente non trovato per Chop-28-15.mid, uso solo analisi MIDI.
+2025-04-15 23:22:14,316 - WARNING -   File .ly corrispondente non trovato per Chop-28-17.mid, uso solo analisi MIDI.
+2025-04-15 23:22:17,500 - WARNING -   File .ly corrispondente non trovato per Chop-28-4a.mid, uso solo analisi MIDI.
+2025-04-15 23:22:17,832 - WARNING -   File .ly corrispondente non trovato per Chop-28-6.mid, uso solo analisi MIDI.
+2025-04-15 23:22:17,988 - WARNING -   File .ly corrispondente non trovato per Chop-28-7.mid, uso solo analisi MIDI.
+2025-04-15 23:22:19,201 - WARNING -   File .ly corrispondente non trovato per chp-op-35-4-scholz-fi.mid, uso solo analisi MIDI.
+2025-04-15 23:22:20,679 - WARNING -   File .ly corrispondente non trovato per ballade-4.mid, uso solo analisi MIDI.
+2025-04-15 23:22:23,434 - WARNING -   File .ly corrispondente non trovato per chopin_valse_op64_no1.mid, uso solo analisi MIDI.
+2025-04-15 23:22:30,086 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-10.mid, uso solo analisi MIDI.
+2025-04-15 23:22:30,135 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-23.mid, uso solo analisi MIDI.
+2025-04-15 23:22:30,256 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-24.mid, uso solo analisi MIDI.
+2025-04-15 23:22:30,945 - WARNING -   File .ly corrispondente non trovato per op840-1.mid, uso solo analisi MIDI.
+2025-04-15 23:22:31,127 - WARNING -   File .ly corrispondente non trovato per op840-10.mid, uso solo analisi MIDI.
+2025-04-15 23:22:31,322 - WARNING -   File .ly corrispondente non trovato per op840-2.mid, uso solo analisi MIDI.
+2025-04-15 23:22:31,552 - WARNING -   File .ly corrispondente non trovato per op840-3.mid, uso solo analisi MIDI.
+2025-04-15 23:22:31,693 - WARNING -   File .ly corrispondente non trovato per op840-4.mid, uso solo analisi MIDI.
+2025-04-15 23:22:31,917 - WARNING -   File .ly corrispondente non trovato per op840-5.mid, uso solo analisi MIDI.
+2025-04-15 23:22:32,066 - WARNING -   File .ly corrispondente non trovato per op840-6.mid, uso solo analisi MIDI.
+2025-04-15 23:22:32,349 - WARNING -   File .ly corrispondente non trovato per op840-7.mid, uso solo analisi MIDI.
+2025-04-15 23:22:32,610 - WARNING -   File .ly corrispondente non trovato per op840-8.mid, uso solo analisi MIDI.
+2025-04-15 23:22:32,730 - WARNING -   File .ly corrispondente non trovato per op840-9.mid, uso solo analisi MIDI.
+2025-04-15 23:22:35,100 - WARNING -   File .ly corrispondente non trovato per L117-prel-4.mid, uso solo analisi MIDI.
+2025-04-15 23:22:37,834 - WARNING -   File .ly corrispondente non trovato per Envoi_orgue.mid, uso solo analisi MIDI.
+2025-04-15 23:22:38,734 - WARNING -   File .ly corrispondente non trovato per Sonata5-1-Allegro.mid, uso solo analisi MIDI.
+2025-04-15 23:22:51,748 - WARNING -   File .ly corrispondente non trovato per DukasVillanelle.mid, uso solo analisi MIDI.
+2025-04-15 23:23:01,418 - WARNING -   File .ly corrispondente non trovato per GF_pavane50.mid, uso solo analisi MIDI.
+2025-04-15 23:23:02,822 - INFO - Elaborato 800/1862 file MIDI...
+2025-04-15 23:23:03,167 - WARNING -   File .ly corrispondente non trovato per oldfolks-1.mid, uso solo analisi MIDI.
+2025-04-15 23:23:03,333 - WARNING -   File .ly corrispondente non trovato per oldfolks-2.mid, uso solo analisi MIDI.
+2025-04-15 23:23:03,500 - WARNING -   File .ly corrispondente non trovato per oldfolks-3.mid, uso solo analisi MIDI.
+2025-04-15 23:23:08,537 - WARNING -   File .ly corrispondente non trovato per Toccata-1.mid, uso solo analisi MIDI.
+2025-04-15 23:23:23,975 - WARNING -   File .ly corrispondente non trovato per GlazunovReveries.mid, uso solo analisi MIDI.
+2025-04-15 23:23:26,378 - WARNING -   File .ly corrispondente non trovato per Litania_a_3-1.mid, uso solo analisi MIDI.
+2025-04-15 23:23:51,980 - INFO - Elaborato 1000/1862 file MIDI...
+2025-04-15 23:23:51,981 - WARNING -   File .ly corrispondente non trovato per op1_4.mid, uso solo analisi MIDI.
+2025-04-15 23:24:02,159 - WARNING -   File .ly corrispondente non trovato per 27-tmeiskin.mid, uso solo analisi MIDI.
+2025-04-15 23:24:03,900 - WARNING -   File .ly corrispondente non trovato per bethena.mid, uso solo analisi MIDI.
+2025-04-15 23:24:11,035 - WARNING -   File .ly corrispondente non trovato per solace.mid, uso solo analisi MIDI.
+2025-04-15 23:24:25,305 - WARNING -   File .ly corrispondente non trovato per samia.mid, uso solo analisi MIDI.
+2025-04-15 23:24:32,536 - WARNING -   File .ly corrispondente non trovato per Armide.mid, uso solo analisi MIDI.
+2025-04-15 23:24:41,728 - WARNING -   File .ly corrispondente non trovato per op121.mid, uso solo analisi MIDI.
+2025-04-15 23:24:45,697 - WARNING -   File .ly corrispondente non trovato per nr1-a4-1.mid, uso solo analisi MIDI.
+2025-04-15 23:24:46,405 - WARNING -   File .ly corrispondente non trovato per nr1-let-1.mid, uso solo analisi MIDI.
+2025-04-15 23:24:53,701 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-04.mid, uso solo analisi MIDI.
+2025-04-15 23:24:53,748 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-05.mid, uso solo analisi MIDI.
+2025-04-15 23:24:53,815 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-07.mid, uso solo analisi MIDI.
+2025-04-15 23:24:53,880 - INFO - Elaborato 1200/1862 file MIDI...
+2025-04-15 23:24:53,880 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-09.mid, uso solo analisi MIDI.
+2025-04-15 23:24:53,961 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-12.mid, uso solo analisi MIDI.
+2025-04-15 23:24:54,033 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-14.mid, uso solo analisi MIDI.
+2025-04-15 23:24:54,158 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-16.mid, uso solo analisi MIDI.
+2025-04-15 23:24:54,242 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-21.mid, uso solo analisi MIDI.
+2025-04-15 23:25:09,174 - WARNING -   File .ly corrispondente non trovato per k375g.mid, uso solo analisi MIDI.
+2025-04-15 23:25:10,554 - WARNING -   File .ly corrispondente non trovato per Symphony25_1.mid, uso solo analisi MIDI.
+2025-04-15 23:25:15,879 - WARNING -   File .ly corrispondente non trovato per Symphony25_2.mid, uso solo analisi MIDI.
+2025-04-15 23:25:17,562 - WARNING -   File .ly corrispondente non trovato per guitar-duo-complete.mid, uso solo analisi MIDI.
+2025-04-15 23:25:27,933 - WARNING -   File .ly corrispondente non trovato per KV331_3_RondoAllaTurca.mid, uso solo analisi MIDI.
+2025-04-15 23:25:28,578 - WARNING -   File .ly corrispondente non trovato per zufriedenheit.mid, uso solo analisi MIDI.
+2025-04-15 23:25:28,675 - WARNING -   File .ly corrispondente non trovato per zufriedenheit-piano.mid, uso solo analisi MIDI.
+2025-04-15 23:25:28,815 - WARNING -   File .ly corrispondente non trovato per zither.mid, uso solo analisi MIDI.
+2025-04-15 23:25:29,884 - WARNING -   File .ly corrispondente non trovato per MozartHornQuintet.mid, uso solo analisi MIDI.
+2025-04-15 23:25:34,047 - WARNING -   File .ly corrispondente non trovato per MozartHornConcerto3.mid, uso solo analisi MIDI.
+2025-04-15 23:25:40,171 - WARNING -   File .ly corrispondente non trovato per k453a.mid, uso solo analisi MIDI.
+2025-04-15 23:25:43,838 - WARNING -   File .ly corrispondente non trovato per no1.mid, uso solo analisi MIDI.
+2025-04-15 23:25:43,934 - WARNING -   File .ly corrispondente non trovato per no10.mid, uso solo analisi MIDI.
+2025-04-15 23:25:43,997 - WARNING -   File .ly corrispondente non trovato per no11.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,101 - WARNING -   File .ly corrispondente non trovato per no12.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,353 - WARNING -   File .ly corrispondente non trovato per no2.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,456 - WARNING -   File .ly corrispondente non trovato per no3.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,585 - WARNING -   File .ly corrispondente non trovato per no4.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,705 - WARNING -   File .ly corrispondente non trovato per no5.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,774 - WARNING -   File .ly corrispondente non trovato per no6.mid, uso solo analisi MIDI.
+2025-04-15 23:25:44,957 - WARNING -   File .ly corrispondente non trovato per no7.mid, uso solo analisi MIDI.
+2025-04-15 23:25:45,027 - WARNING -   File .ly corrispondente non trovato per no8.mid, uso solo analisi MIDI.
+2025-04-15 23:25:45,141 - WARNING -   File .ly corrispondente non trovato per no9.mid, uso solo analisi MIDI.
+2025-04-15 23:25:45,237 - WARNING -   File .ly corrispondente non trovato per MozartHornConcerto4.mid, uso solo analisi MIDI.
+2025-04-15 23:25:52,484 - WARNING -   File .ly corrispondente non trovato per k517.mid, uso solo analisi MIDI.
+2025-04-15 23:25:52,660 - WARNING -   File .ly corrispondente non trovato per k518.mid, uso solo analisi MIDI.
+2025-04-15 23:25:52,800 - WARNING -   File .ly corrispondente non trovato per k519.mid, uso solo analisi MIDI.
+2025-04-15 23:25:53,970 - WARNING -   File .ly corrispondente non trovato per k520.mid, uso solo analisi MIDI.
+2025-04-15 23:25:55,267 - WARNING -   File .ly corrispondente non trovato per k523.mid, uso solo analisi MIDI.
+2025-04-15 23:25:55,869 - WARNING -   File .ly corrispondente non trovato per eine-kleine-nachtmusik-mvt1.mid, uso solo analisi MIDI.
+2025-04-15 23:25:59,960 - WARNING -   File .ly corrispondente non trovato per Fantasia.mid, uso solo analisi MIDI.
+2025-04-15 23:26:02,047 - WARNING -   File .ly corrispondente non trovato per dies_irae.mid, uso solo analisi MIDI.
+2025-04-15 23:26:10,876 - WARNING -   File .ly corrispondente non trovato per NielsenCantoSerioso.mid, uso solo analisi MIDI.
+2025-04-15 23:26:12,469 - WARNING -   File .ly corrispondente non trovato per PachelbelGigue.mid, uso solo analisi MIDI.
+2025-04-15 23:26:12,654 - WARNING -   File .ly corrispondente non trovato per Caprice_1.mid, uso solo analisi MIDI.
+2025-04-15 23:26:12,962 - WARNING -   File .ly corrispondente non trovato per Caprice_2.mid, uso solo analisi MIDI.
+2025-04-15 23:26:14,542 - WARNING -   File .ly corrispondente non trovato per Caprice_3.mid, uso solo analisi MIDI.
+2025-04-15 23:26:22,016 - WARNING -   File .ly corrispondente non trovato per JehovaQuamMulti.mid, uso solo analisi MIDI.
+2025-04-15 23:26:36,457 - WARNING -   File .ly corrispondente non trovato per Eduardo_e_Cristina.mid, uso solo analisi MIDI.
+2025-04-15 23:26:46,021 - WARNING -   File .ly corrispondente non trovato per SaintSaensRomance.mid, uso solo analisi MIDI.
+2025-04-15 23:26:49,170 - INFO - Elaborato 1400/1862 file MIDI...
+2025-04-15 23:26:49,863 - WARNING -   File .ly corrispondente non trovato per Danse.mid, uso solo analisi MIDI.
+2025-04-15 23:26:50,750 - WARNING -   File .ly corrispondente non trovato per enfantillages_pittoresques.mid, uso solo analisi MIDI.
+2025-04-15 23:26:53,172 - WARNING -   File .ly corrispondente non trovato per Son_Binocle.mid, uso solo analisi MIDI.
+2025-04-15 23:26:56,325 - WARNING -   File .ly corrispondente non trovato per Sonataduodecima_Score.mid, uso solo analisi MIDI.
+2025-04-15 23:26:58,073 - WARNING -   File .ly corrispondente non trovato per gretchen.mid, uso solo analisi MIDI.
+2025-04-15 23:27:03,870 - WARNING -   File .ly corrispondente non trovato per Erlkoenig_alt.mid, uso solo analisi MIDI.
+2025-04-15 23:27:06,757 - WARNING -   File .ly corrispondente non trovato per forelle.mid, uso solo analisi MIDI.
+2025-04-15 23:27:52,888 - WARNING -   File .ly corrispondente non trovato per SchubertAufDemStrom.mid, uso solo analisi MIDI.
+2025-04-15 23:27:57,794 - WARNING -   File .ly corrispondente non trovato per SchubertF-D965-DerHirtAufDemFelsen.mid, uso solo analisi MIDI.
+2025-04-15 23:28:02,758 - WARNING -   File .ly corrispondente non trovato per 16-berceuse.mid, uso solo analisi MIDI.
+2025-04-15 23:28:05,698 - WARNING -   File .ly corrispondente non trovato per romanze-op28-2.mid, uso solo analisi MIDI.
+2025-04-15 23:28:10,206 - WARNING -   File .ly corrispondente non trovato per schumann-op68-32-sheherazade.mid, uso solo analisi MIDI.
+2025-04-15 23:28:11,800 - WARNING -   File .ly corrispondente non trovato per scriabine-op16-no4.mid, uso solo analisi MIDI.
+2025-04-15 23:28:13,828 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-02.mid, uso solo analisi MIDI.
+2025-04-15 23:28:13,927 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-03.mid, uso solo analisi MIDI.
+2025-04-15 23:28:14,018 - WARNING -   File .ly corrispondente non trovato per guitar-skole-no-18.mid, uso solo analisi MIDI.
+2025-04-15 23:28:25,462 - INFO - Elaborato 1600/1862 file MIDI...
+2025-04-15 23:28:34,280 - WARNING -   File .ly corrispondente non trovato per FranzStraussNocturno.mid, uso solo analisi MIDI.
+2025-04-15 23:28:38,778 - WARNING -   File .ly corrispondente non trovato per recuerdos.mid, uso solo analisi MIDI.
+2025-04-15 23:29:10,373 - INFO - Elaborato 1800/1862 file MIDI...
+2025-04-15 23:29:47,592 - INFO - Elaborazione completata. Voci valide nel dataset grezzo: 1862
+2025-04-15 23:29:47,592 - INFO - --- Fase 2: Divisione del Dataset ---
+2025-04-15 23:29:47,593 - INFO - Dimensioni dataset: Totale=1862, Train=1489, Validation=186, Test=187
+2025-04-15 23:29:47,607 - INFO - Salvato 1489 voci in mutopia_data\dataset_splits\train.jsonl
+2025-04-15 23:29:47,610 - INFO - Salvato 186 voci in mutopia_data\dataset_splits\validation.jsonl
+2025-04-15 23:29:47,612 - INFO - Salvato 187 voci in mutopia_data\dataset_splits\test.jsonl
+2025-04-15 23:29:47,613 - INFO - --- Script Terminato ---
