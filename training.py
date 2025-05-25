@@ -28,7 +28,7 @@ MODEL_SAVE_DIR = DATA_DIR / "model_checkpoints" # Directory per salvare i modell
 MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Configurazioni Tokenizer MIDI (scegliere una strategia)
-MIDI_TOKENIZER_STRATEGY = miditok.REMI # Esempio scelto
+MIDI_TOKENIZER_STRATEGY = miditok.TSD # Esempio scelto
 MIDI_VOCAB_TARGET_SIZE = 30000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
 
 VOCAB_PATH = DATA_DIR / "midi_vocab.json" # Dove salvare/caricare il vocabolario MIDI
@@ -49,7 +49,7 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 # Iperparametri del Modello e Addestramento (Esempi!)
 EPOCHS = 20
 BATCH_SIZE = 16 # Riduci se hai poca memoria GPU
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.001
 EMB_SIZE = 256 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
 FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward

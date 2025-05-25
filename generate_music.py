@@ -15,7 +15,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODIFICA QUESTI PERCORSI ===
 # Percorso del checkpoint del modello addestrato (.pt)
-PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\model_checkpoints\transformer_mutopia_best_epoch34_valloss6.4904_20250525-184307.pt")
+PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\model_checkpoints\transformer_mutopia_final_epoch12_valloss8.8559_20250525-225026.pt")
 # Percorso del file di vocabolario MIDI (.json) usato per addestrare il modello sopra
 PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\midi_vocab.json")
 # Percorso del file di vocabolario dei metadati (.json) usato per addestrare il modello sopra
@@ -26,7 +26,7 @@ GENERATION_OUTPUT_DIR = Path("./generated_midi_inference")
 
 # Strategia di Tokenizzazione (DEVE CORRISPONDERE A QUELLA USATA PER L'ADDDESTRAMENTO DEL MODELLO CARICATO)
 # Ad esempio, se il modello è stato addestrato con REMI:
-MIDI_TOKENIZER_STRATEGY = miditok.REMI
+MIDI_TOKENIZER_STRATEGY = miditok.TSD
 # Se era CPWord:
 # MIDI_TOKENIZER_STRATEGY = miditok.CPWord # Attenzione: CPWord ha mostrato problemi di multi-vocabolario
 
@@ -131,17 +131,16 @@ class PositionalEncoding(nn.Module):
 
 class Seq2SeqTransformer(nn.Module):
     def __init__(self, num_encoder_layers, num_decoder_layers, emb_size, nhead,
-                 src_vocab_size, tgt_vocab_size, dim_feedforward=512, dropout=0.1):
+                 src_vocab_size, tgt_vocab_size, max_pe_len,  # <--- AGGIUNGI max_pe_len QUI
+                 dim_feedforward=512, dropout=0.1):
         super().__init__()
-        self.emb_size = emb_size # Salva emb_size per PositionalEncoding
+        self.emb_size = emb_size
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = nn.Embedding(tgt_vocab_size, emb_size)
-        # Usa una max_len sufficientemente grande per PositionalEncoding
-        # o rendila un parametro se varia molto e non è fissa.
-        # Il valore di default 5000 è solitamente sicuro.
-        # Se il checkpoint salva MAX_SEQ_LEN usati, potresti usarli qui.
-        pe_max_len = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 # Un buffer generoso
-        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=pe_max_len)
+        
+        # Rimuovi il calcolo interno di pe_max_len se max_pe_len viene passato
+        # pe_max_len = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_pe_len) # <--- USA max_pe_len passato
 
         self.transformer = nn.Transformer(
             d_model=emb_size, nhead=nhead,
