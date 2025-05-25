@@ -544,59 +544,95 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
     logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     logging.info(f"Device: {DEVICE}")
+    
+    model_params_to_save = {
+    'num_encoder_layers': NUM_ENCODER_LAYERS,
+    'num_decoder_layers': NUM_DECODER_LAYERS,
+    'emb_size': EMB_SIZE,
+    'nhead': NHEAD,
+    'src_vocab_size': META_VOCAB_SIZE,
+    'tgt_vocab_size': MIDI_VOCAB_SIZE,
+    'dim_feedforward': FFN_HID_DIM,
+    'dropout': DROPOUT,
+    'max_pe_len': max_pe_len_calculated
+    }
+    
+    vocab_info_to_save = {
+        'midi_vocab_path': str(VOCAB_PATH),
+        'metadata_vocab_path': str(METADATA_VOCAB_PATH),
+        'midi_pad_id': MIDI_PAD_ID,
+        'meta_pad_id': META_PAD_ID,
+        'MAX_SEQ_LEN_MIDI': MAX_SEQ_LEN_MIDI,
+        'MAX_SEQ_LEN_META': MAX_SEQ_LEN_META
+    }
 
     logging.info("--- Inizio Addestramento ---")
     best_val_loss = float('inf')
     epochs_no_improve = 0
     patience = 5
+    last_saved_epoch = 0 # Per tenere traccia dell'ultima epoca in cui è stato salvato un checkpoint periodico
 
     for epoch in range(1, EPOCHS + 1):
         logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
         start_time_epoch = time.time()
         train_loss_epoch = train_epoch(model, optimizer, criterion, train_dataloader)
-        val_loss_epoch = evaluate(model, criterion, val_dataloader)
+        val_loss_epoch = evaluate(model, criterion, val_dataloader) # val_loss_epoch è la loss di validazione dell'epoca corrente
         epoch_duration_total = time.time() - start_time_epoch
         logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {val_loss_epoch:.4f} (Durata: {epoch_duration_total:.2f}s)")
 
-        if val_loss_epoch < best_val_loss:
-            best_val_loss = val_loss_epoch
-            epochs_no_improve = 0
+        # --- Logica di salvataggio checkpoint ---
+        # Salva un checkpoint ogni 10 epoche
+        if epoch % 10 == 0:
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            model_filename = f"transformer_mutopia_best_epoch{epoch}_valloss{best_val_loss:.4f}_{timestamp}.pt"
-            current_best_model_path = MODEL_SAVE_DIR / model_filename
-            logging.info(f"Miglioramento. Salvataggio modello: {current_best_model_path}")
+            periodic_model_filename = f"transformer_mutopia_epoch{epoch}_valloss{val_loss_epoch:.4f}_{timestamp}.pt"
+            periodic_model_path = MODEL_SAVE_DIR / periodic_model_filename
+            logging.info(f"Salvataggio checkpoint periodico (epoch {epoch}): {periodic_model_path}")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'best_val_loss': best_val_loss,
-                'model_params': {
-                    'num_encoder_layers': NUM_ENCODER_LAYERS,
-                    'num_decoder_layers': NUM_DECODER_LAYERS,
-                    'emb_size': EMB_SIZE,
-                    'nhead': NHEAD,
-                    'src_vocab_size': META_VOCAB_SIZE,
-                    'tgt_vocab_size': MIDI_VOCAB_SIZE,
-                    'dim_feedforward': FFN_HID_DIM,
-                    'dropout': DROPOUT,
-                    'max_pe_len': max_pe_len_calculated # Salva il max_pe_len usato
-                },
-                'vocab_info': {
-                    'midi_vocab_path': str(VOCAB_PATH),
-                    'metadata_vocab_path': str(METADATA_VOCAB_PATH),
-                    'midi_pad_id': MIDI_PAD_ID,
-                    'meta_pad_id': META_PAD_ID,
-                    'MAX_SEQ_LEN_MIDI': MAX_SEQ_LEN_MIDI, # Salva anche questi per riferimento
-                    'MAX_SEQ_LEN_META': MAX_SEQ_LEN_META
-                }
-            }, current_best_model_path)
+                'current_val_loss': val_loss_epoch, # Validation loss di questa epoca
+                'best_val_loss': best_val_loss,     # Migliore validation loss vista finora (per early stopping)
+                'model_params': model_params_to_save,
+                'vocab_info': vocab_info_to_save
+            }, periodic_model_path)
+            last_saved_epoch = epoch
+
+        # --- Logica di Early stopping ---
+        if val_loss_epoch < best_val_loss:
+            logging.info(f"Validation loss migliorata da {best_val_loss:.4f} a {val_loss_epoch:.4f}.")
+            best_val_loss = val_loss_epoch
+            epochs_no_improve = 0
+            # Non salviamo più il "best_model" qui ad ogni miglioramento,
+            # ma continuiamo a tracciare best_val_loss per l'early stopping.
         else:
             epochs_no_improve += 1
-            logging.info(f"Nessun miglioramento. Epoche senza: {epochs_no_improve}/{patience}")
+            logging.info(f"Validation loss non migliorata ({val_loss_epoch:.4f} vs best {best_val_loss:.4f}). Epoche senza miglioramento: {epochs_no_improve}/{patience}")
 
         if epochs_no_improve >= patience:
-            logging.info(f"Early stopping dopo {patience} epoche.")
-            break
-    
+            logging.info(f"Nessun miglioramento per {patience} epoche consecutive. Early stopping.")
+            break # Esce dal ciclo di addestramento
+
+    # --- Salvataggio del modello finale ---
+    # Salva lo stato finale del modello dopo il completamento di tutte le epoche o l'early stopping,
+    # specialmente se l'ultima epoca non era un multiplo di 10.
+    if epoch != last_saved_epoch : # Controlla se l'ultimo stato è già stato salvato periodicamente
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        final_model_filename = f"transformer_mutopia_final_epoch{epoch}_valloss{val_loss_epoch:.4f}_{timestamp}.pt"
+        final_model_path = MODEL_SAVE_DIR / final_model_filename
+        logging.info(f"Salvataggio checkpoint finale (dopo epoch {epoch}): {final_model_path}")
+        torch.save({
+            'epoch': epoch, # Ultima epoca completata
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'current_val_loss': val_loss_epoch, # Validation loss dell'ultima epoca
+            'best_val_loss': best_val_loss,     # Migliore validation loss generale
+            'model_params': model_params_to_save,
+            'vocab_info': vocab_info_to_save
+        }, final_model_path)
+    else:
+        logging.info(f"Lo stato finale del modello (epoch {epoch}) è già stato salvato come checkpoint periodico.")
+
+
     logging.info("--- Addestramento Terminato ---")
     logging.info("--- Script Terminato ---")
