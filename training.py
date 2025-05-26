@@ -22,14 +22,20 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_DIR = Path("/content/SheetsMusicGenerator/mutopia_data") # Directory base dei dati scaricati
 SPLITS_DIR = DATA_DIR / "dataset_splits" # Directory con train/validation/test.jsonl
 MIDI_BASE_DIR = DATA_DIR # Directory radice dove cercare i midi_relative_path
-MODEL_SAVE_DIR = DATA_DIR / "model_checkpoints" # Directory per salvare i modelli
+
+# Definisci il percorso su Google Drive dove vuoi salvare i modelli
+# Assicurati che la cartella "IlMioProgettoModelli" (o come vuoi chiamarla)
+# esista nel tuo Google Drive, oppure MODEL_SAVE_DIR.mkdir la creerà.
+DRIVE_MOUNT_POINT = Path("/content/drive/MyDrive/")
+MODEL_SAVE_DIR = DRIVE_MOUNT_POINT / "SheetsMusicGenerator_Models" # Esempio: Salva in una cartella "SheetsMusicGenerator_Models" su Drive
+# --- FINE MODIFICA PER MODEL_SAVE_DIR ---
 
 # Crea directory se non esistono
 MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Configurazioni Tokenizer MIDI (scegliere una strategia)
-MIDI_TOKENIZER_STRATEGY = miditok.TSD # Esempio scelto
-MIDI_VOCAB_TARGET_SIZE = 30000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
+MIDI_TOKENIZER_STRATEGY = miditok.BPE # Esempio scelto
+MIDI_VOCAB_TARGET_SIZE = 50000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
 
 VOCAB_PATH = DATA_DIR / "midi_vocab.json" # Dove salvare/caricare il vocabolario MIDI
 METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json" # Vocabolario per i token metadati
