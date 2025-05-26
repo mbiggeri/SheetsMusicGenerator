@@ -34,7 +34,7 @@ MODEL_SAVE_DIR = DRIVE_MOUNT_POINT / "SheetsMusicGenerator_Models" # Esempio: Sa
 MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Configurazioni Tokenizer MIDI (scegliere una strategia)
-MIDI_TOKENIZER_STRATEGY = miditok.BPE # Esempio scelto
+MIDI_TOKENIZER_STRATEGY = miditok.TSD # Esempio scelto
 MIDI_VOCAB_TARGET_SIZE = 50000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
 
 VOCAB_PATH = DATA_DIR / "midi_vocab.json" # Dove salvare/caricare il vocabolario MIDI
@@ -53,9 +53,9 @@ META_SOS_TOKEN_NAME = "<sos_meta>"
 META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
-EPOCHS = 20
-BATCH_SIZE = 16 # Riduci se hai poca memoria GPU
-LEARNING_RATE = 0.001
+EPOCHS = 25
+BATCH_SIZE = 256 # Riduci se hai poca memoria GPU
+LEARNING_RATE = 0.0001
 EMB_SIZE = 256 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
 FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
@@ -114,6 +114,20 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
 
         if midi_file_paths:
             logging.info(f"Verifica se il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} necessita di addestramento...")
+            logging.info(f"Tipo di tokenizer prima del check 'train': {type(tokenizer)}")
+            logging.info(f"L'istanza del tokenizer HA l'attributo 'train'? {hasattr(tokenizer, 'train')}")
+            if hasattr(tokenizer, 'train'):
+                logging.info(f"Entro nel blocco if hasattr(tokenizer, 'train')") # Conferma
+                try:
+                    logging.info(f"Dimensione vocabolario PRIMA di tokenizer.train: {len(tokenizer)}")
+                    tokenizer.train(vocab_size=MIDI_VOCAB_TARGET_SIZE, files_paths=midi_file_paths)
+                    logging.info(f"Dimensione vocabolario DOPO tokenizer.train: {len(tokenizer)}")
+                except Exception as e:
+                    logging.error(f"Errore durante tokenizer.train: {e}", exc_info=True)
+            else:
+                logging.info(f"Il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} non ha il metodo .train()")
+            
+            
             if hasattr(tokenizer, 'train'): # Metodo 'train' per BPE, Unigram, WordPiece
                 logging.info(f"Addestramento tokenizer ({MIDI_TOKENIZER_STRATEGY.__name__}) su {len(midi_file_paths)} file. Target vocab size: {MIDI_VOCAB_TARGET_SIZE}")
                 tokenizer.train(vocab_size=MIDI_VOCAB_TARGET_SIZE, files_paths=midi_file_paths)
