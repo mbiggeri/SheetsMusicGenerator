@@ -4,6 +4,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
+import gc # Importa il modulo garbage collection
 import miditok # Assicurati di installare miditok
 from pathlib import Path
 import json
@@ -439,6 +440,13 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        
+        # Svuota la cache CUDA
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        # Forzare la garbage collection di Python (per liberare anche RAM CPU)
+        gc.collect()
 
         total_loss += loss.item()
         processed_batches += 1
