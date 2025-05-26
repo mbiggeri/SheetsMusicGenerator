@@ -19,7 +19,7 @@ from symusic import Score
 
 # --- Configurazione / Costanti ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = Path("./mutopia_data") # Directory base dei dati scaricati
+DATA_DIR = Path("/mutopia_data") # Directory base dei dati scaricati
 SPLITS_DIR = DATA_DIR / "dataset_splits" # Directory con train/validation/test.jsonl
 MIDI_BASE_DIR = DATA_DIR # Directory radice dove cercare i midi_relative_path
 MODEL_SAVE_DIR = DATA_DIR / "model_checkpoints" # Directory per salvare i modelli
@@ -267,6 +267,7 @@ class MutopiaDataset(Dataset):
                         midi_relative_path_str = current_metadata.get('midi_relative_path')
                         if not midi_relative_path_str:
                             continue # skipped_no_relative_path += 1
+                        midi_relative_path_str = midi_relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
                         midi_path_check = self.midi_base_dir / midi_relative_path_str
                         if midi_path_check.exists() and midi_path_check.is_file():
                             self.data.append(entry)
@@ -292,6 +293,7 @@ class MutopiaDataset(Dataset):
         actual_metadata = entry.get('metadata', {})
         midi_relative_path_str = actual_metadata.get('midi_relative_path')
         if not midi_relative_path_str: return None
+        midi_relative_path_str = midi_relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
         midi_full_path = self.midi_base_dir / midi_relative_path_str
 
         for attempt in range(max_retries):
@@ -483,6 +485,7 @@ if __name__ == "__main__":
                     metadata_dict = entry.get('metadata', {})
                     relative_path_str = metadata_dict.get('midi_relative_path')
                     if relative_path_str:
+                        relative_path_str = relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
                         midi_full_path_str = str(MIDI_BASE_DIR / relative_path_str)
                         if Path(midi_full_path_str).is_file():
                             midi_files_for_vocab_build.append(midi_full_path_str)
