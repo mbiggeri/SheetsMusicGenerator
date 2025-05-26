@@ -15,7 +15,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODIFICA QUESTI PERCORSI ===
 # Percorso del checkpoint del modello addestrato (.pt)
-PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\model_checkpoints\transformer_mutopia_final_epoch12_valloss8.8559_20250525-225026.pt")
+PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\ModelliMusicGenerator\transformer_mutopia_final_epoch25_valloss1.8205_20250526-092913.pt")
 # Percorso del file di vocabolario MIDI (.json) usato per addestrare il modello sopra
 PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\midi_vocab.json")
 # Percorso del file di vocabolario dei metadati (.json) usato per addestrare il modello sopra

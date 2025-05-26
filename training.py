@@ -118,7 +118,7 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
             logging.info(f"L'istanza del tokenizer HA l'attributo 'train'? {hasattr(tokenizer, 'train')}")
             # if hasattr(tokenizer, 'train'):      Esegui questa se vuoi che venga costruito un vocabolario finale più piccolo con BPE o simili a partire da quello generato con la strategy
             logging.info(f"Numero di file MIDI forniti per l'addestramento: {len(midi_file_paths)}")    
-            if MIDI_TOKENIZER_STRATEGY != miditok.TSD and hasattr(tokenizer, 'train'):          
+            if (MIDI_TOKENIZER_STRATEGY != miditok.TSD or MIDI_TOKENIZER_STRATEGY != miditok.REMI)  and hasattr(tokenizer, 'train'):          
                 logging.info(f"Entro nel blocco if hasattr(tokenizer, 'train')") # Conferma
                 try:
                     logging.info(f"Dimensione vocabolario PRIMA di tokenizer.train: {len(tokenizer)}")
