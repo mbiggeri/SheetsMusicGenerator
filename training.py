@@ -19,7 +19,7 @@ from symusic import Score
 
 # --- Configurazione / Costanti ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = Path("/mutopia_data") # Directory base dei dati scaricati
+DATA_DIR = Path("/content/SheetsMusicGenerator/mutopia_data") # Directory base dei dati scaricati
 SPLITS_DIR = DATA_DIR / "dataset_splits" # Directory con train/validation/test.jsonl
 MIDI_BASE_DIR = DATA_DIR # Directory radice dove cercare i midi_relative_path
 MODEL_SAVE_DIR = DATA_DIR / "model_checkpoints" # Directory per salvare i modelli
