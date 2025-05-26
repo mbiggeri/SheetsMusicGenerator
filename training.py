@@ -116,7 +116,9 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
             logging.info(f"Verifica se il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} necessita di addestramento...")
             logging.info(f"Tipo di tokenizer prima del check 'train': {type(tokenizer)}")
             logging.info(f"L'istanza del tokenizer HA l'attributo 'train'? {hasattr(tokenizer, 'train')}")
-            if hasattr(tokenizer, 'train'):
+            # if hasattr(tokenizer, 'train'):      Esegui questa se vuoi che venga costruito un vocabolario finale più piccolo con BPE o simili a partire da quello generato con la strategy
+            logging.info(f"Numero di file MIDI forniti per l'addestramento: {len(midi_file_paths)}")    
+            if MIDI_TOKENIZER_STRATEGY != miditok.TSD and hasattr(tokenizer, 'train'):          
                 logging.info(f"Entro nel blocco if hasattr(tokenizer, 'train')") # Conferma
                 try:
                     logging.info(f"Dimensione vocabolario PRIMA di tokenizer.train: {len(tokenizer)}")
@@ -126,17 +128,6 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
                     logging.error(f"Errore durante tokenizer.train: {e}", exc_info=True)
             else:
                 logging.info(f"Il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} non ha il metodo .train()")
-            
-            
-            if hasattr(tokenizer, 'train'): # Metodo 'train' per BPE, Unigram, WordPiece
-                logging.info(f"Addestramento tokenizer ({MIDI_TOKENIZER_STRATEGY.__name__}) su {len(midi_file_paths)} file. Target vocab size: {MIDI_VOCAB_TARGET_SIZE}")
-                tokenizer.train(vocab_size=MIDI_VOCAB_TARGET_SIZE, files_paths=midi_file_paths)
-                logging.info("Addestramento tokenizer completato.")
-            # learn_bpe era un vecchio nome, 'train' è quello corrente in miditok >= 3.0 per modelli BPE/Unigram/WordPiece
-            # Altri tokenizer come REMI/TSD non usano .train() in questo modo; il loro vocabolario è più fisso.
-            else:
-                logging.info(f"Il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} non usa un metodo .train() per costruire un vocabolario BPE/Unigram/WordPiece. "
-                                "Il vocabolario sarà basato sulla configurazione e sui token speciali.")
         else:
             logging.warning("Nessun file MIDI fornito per l'addestramento del tokenizer durante la costruzione. "
                             "Il vocabolario potrebbe essere subottimale se l'addestramento (es. BPE) è necessario per la strategia scelta.")
