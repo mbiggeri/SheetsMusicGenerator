@@ -18,9 +18,30 @@ import sys
 from functools import partial # IMPORTANTE: Aggiunto per DataLoader collate_fn
 from symusic import Score
 
+# --- Configurazione del logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # --- Configurazione / Costanti ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = Path("/content/SheetsMusicGenerator/mutopia_data") # Directory base dei dati scaricati
+
+# Percorsi base per i dataset
+DATA_DIR_MUTOPIA = Path("/content/SheetsMusicGenerator/mutopia_data")
+DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_Of_MIDI") # Come specificato
+
+# Imposta DATA_DIR di default (mutopia)
+DATA_DIR = DATA_DIR_MUTOPIA
+dataset_name_chosen = "mutopia (default)"
+
+# Controlla gli argomenti da riga di comando
+if "-magicmidi" in sys.argv:
+    DATA_DIR = DATA_DIR_MAGICMIDI
+    dataset_name_chosen = "The_Magic_Of_MIDI"
+elif "-mutopia" in sys.argv:
+    DATA_DIR = DATA_DIR_MUTOPIA # Esplicito, anche se è il default
+    dataset_name_chosen = "mutopia"
+
+logging.info(f"Utilizzo del dataset: {dataset_name_chosen} ({DATA_DIR})")
+
 SPLITS_DIR = DATA_DIR / "dataset_splits" # Directory con train/validation/test.jsonl
 MIDI_BASE_DIR = DATA_DIR # Directory radice dove cercare i midi_relative_path
 
@@ -70,8 +91,8 @@ MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 PIANO_PROGRAMS = list(range(0, 8))
 
 # --- NUOVI IPERPARAMETRI PER MODALITÀ DI PROCESSSAMENTO ---
-PROCESSING_MODE = "piano_only"
-# PROCESSING_MODE = "multi_instrument_stream"
+# PROCESSING_MODE = "piano_only"
+PROCESSING_MODE = "multi_instrument_stream"
 
 # Setup Logging (opzionale ma utile)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -114,12 +135,9 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
         logging.info(f"Tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} inizializzato con use_programs=True, one_token_stream_for_programs=True.")
 
         if midi_file_paths:
-            logging.info(f"Verifica se il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} necessita di addestramento...")
-            logging.info(f"Tipo di tokenizer prima del check 'train': {type(tokenizer)}")
-            logging.info(f"L'istanza del tokenizer HA l'attributo 'train'? {hasattr(tokenizer, 'train')}")
             # if hasattr(tokenizer, 'train'):      Esegui questa se vuoi che venga costruito un vocabolario finale più piccolo con BPE o simili a partire da quello generato con la strategy
             logging.info(f"Numero di file MIDI forniti per l'addestramento: {len(midi_file_paths)}")    
-            if (MIDI_TOKENIZER_STRATEGY != miditok.TSD or MIDI_TOKENIZER_STRATEGY != miditok.REMI)  and hasattr(tokenizer, 'train'):          
+            if MIDI_TOKENIZER_STRATEGY != miditok.TSD and MIDI_TOKENIZER_STRATEGY != miditok.REMI and hasattr(tokenizer, 'train'):          
                 logging.info(f"Entro nel blocco if hasattr(tokenizer, 'train')") # Conferma
                 try:
                     logging.info(f"Dimensione vocabolario PRIMA di tokenizer.train: {len(tokenizer)}")

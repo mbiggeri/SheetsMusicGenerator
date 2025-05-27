@@ -15,7 +15,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODIFICA QUESTI PERCORSI ===
 # Percorso del checkpoint del modello addestrato (.pt)
-PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\ModelliMusicGenerator\transformer_mutopia_final_epoch25_valloss1.8205_20250526-092913.pt")
+PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Desktop\ModelliMusicGenerator\transformer_mutopia_epoch100_valloss1.3940_20250526-121312.pt")
 # Percorso del file di vocabolario MIDI (.json) usato per addestrare il modello sopra
 PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\midi_vocab.json")
 # Percorso del file di vocabolario dei metadati (.json) usato per addestrare il modello sopra
@@ -26,7 +26,7 @@ GENERATION_OUTPUT_DIR = Path("./generated_midi_inference")
 
 # Strategia di Tokenizzazione (DEVE CORRISPONDERE A QUELLA USATA PER L'ADDDESTRAMENTO DEL MODELLO CARICATO)
 # Ad esempio, se il modello è stato addestrato con REMI:
-MIDI_TOKENIZER_STRATEGY = miditok.TSD
+MIDI_TOKENIZER_STRATEGY = miditok.REMI
 # Se era CPWord:
 # MIDI_TOKENIZER_STRATEGY = miditok.CPWord # Attenzione: CPWord ha mostrato problemi di multi-vocabolario
 
@@ -183,7 +183,7 @@ class Seq2SeqTransformer(nn.Module):
                                          memory_key_padding_mask=memory_key_padding_mask)
 
 def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
-                      max_len=500, min_len=50, temperature=1.0, top_k=None, device=DEVICE): # Aggiunto min_len
+                      max_len=500, min_len=50, temperature=0, top_k=None, device=DEVICE): # Aggiunto min_len
     model.eval()
     try:
         sos_meta_id = metadata_vocab_map[META_SOS_TOKEN_NAME]
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     # Esempio di prompt metadati (puoi cambiarlo)
     example_metadata_prompt_list = [
         ["Style=Folk", "Key=A_minor", "TimeSig=4/4", "Title=Villa_Collemandina"],
-        ["Style=Classical", "Key=C_Major", "TimeSig=3/4", "Title=minuet_in_c"],
+        ["Style=Classical", "Key=C_Major", "TimeSig=3/4", "Title=Stanzina"],
         ["Style=Baroque", "Key=G_Major", "TimeSig=4/4", "Title=invention_bach"],
     ]
 
