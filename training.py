@@ -26,7 +26,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Percorsi base per i dataset
 DATA_DIR_MUTOPIA = Path("/content/SheetsMusicGenerator/mutopia_data")
-DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_Of_MIDI") # Come specificato
+DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_of_MIDI") # Come specificato
 
 # Imposta DATA_DIR di default (mutopia)
 DATA_DIR = DATA_DIR_MUTOPIA
@@ -78,8 +78,8 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 EPOCHS = 25
 BATCH_SIZE = 256 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
-EMB_SIZE = 256 # Dimensione embedding
-NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
+EMB_SIZE = 512 # Dimensione embedding
+NHEAD = 8 # Numero di head nell'attention (deve dividere EMB_SIZE)
 FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
