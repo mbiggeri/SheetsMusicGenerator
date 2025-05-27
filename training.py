@@ -566,8 +566,8 @@ if __name__ == "__main__":
          sys.exit(1)
 
     collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn_with_padding_ids, num_workers=0)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn_with_padding_ids, num_workers=0)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn_with_padding_ids, num_workers=12)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn_with_padding_ids, num_workers=12)
 
     logging.info("--- Inizializzazione Modello ---")
     # Calcola max_pe_len da usare
