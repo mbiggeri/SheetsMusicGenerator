@@ -45,7 +45,7 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 # Lunghezze massime sequenza (idealmente prese dal checkpoint o corrispondenti al training)
 # Queste sono usate in generate_sequence e PositionalEncoding.
 # Se il checkpoint non le salva esplicitamente per PositionalEncoding, assicurati che siano abbastanza grandi.
-MAX_SEQ_LEN_MIDI = 8192
+MAX_SEQ_LEN_MIDI = 1024
 MAX_SEQ_LEN_META = 128
 
 # Setup Logging
