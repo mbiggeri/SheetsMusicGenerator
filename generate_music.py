@@ -15,11 +15,11 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODIFICA QUESTI PERCORSI ===
 # Percorso del checkpoint del modello addestrato (.pt)
-PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Downloads\transformer_mutopia_epoch30_valloss1.3633_20250528-062815.pt")
+PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Downloads\transformer_mutopia_epoch3_valloss1.9265_20250528-113813.pt")
 # Percorso del file di vocabolario MIDI (.json) usato per addestrare il modello sopra
-PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\midi_vocab.json")
+PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\ModelloPiccolo\midi_vocab.json")
 # Percorso del file di vocabolario dei metadati (.json) usato per addestrare il modello sopra
-PATH_VOCAB_METADATA = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\mutopia_data\metadata_vocab.json")
+PATH_VOCAB_METADATA = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\ModelloPiccolo\metadata_vocab.json")
 # Directory dove salvare i file MIDI generati
 GENERATION_OUTPUT_DIR = Path("./generated_midi_inference")
 # ================================
@@ -131,16 +131,14 @@ class PositionalEncoding(nn.Module):
 
 class Seq2SeqTransformer(nn.Module):
     def __init__(self, num_encoder_layers, num_decoder_layers, emb_size, nhead,
-                 src_vocab_size, tgt_vocab_size, max_pe_len,  # <--- AGGIUNGI max_pe_len QUI
+                 src_vocab_size, tgt_vocab_size, max_pe_len,
                  dim_feedforward=512, dropout=0.1):
         super().__init__()
         self.emb_size = emb_size
         self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
         self.tgt_tok_emb = nn.Embedding(tgt_vocab_size, emb_size)
         
-        # Rimuovi il calcolo interno di pe_max_len se max_pe_len viene passato
-        # pe_max_len = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 
-        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_pe_len) # <--- USA max_pe_len passato
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_pe_len)
 
         self.transformer = nn.Transformer(
             d_model=emb_size, nhead=nhead,
@@ -183,7 +181,8 @@ class Seq2SeqTransformer(nn.Module):
                                          memory_key_padding_mask=memory_key_padding_mask)
 
 def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
-                      max_len=10000, min_len=5000, temperature=0.5, top_k=None, device=DEVICE): # Aggiunto min_len
+                      max_len=10000, min_len=5000, temperature=0.5, top_k=None, device=DEVICE,
+                      log_progress_every_n_tokens=100): # Aggiunto min_len e log_progress_every_n_tokens
     model.eval()
     try:
         sos_meta_id = metadata_vocab_map[META_SOS_TOKEN_NAME]
@@ -201,13 +200,15 @@ def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt
     src_seq = torch.tensor([[sos_meta_id] + meta_token_ids[:MAX_SEQ_LEN_META-2] + [eos_meta_id]], dtype=torch.long, device=device)
     src_padding_mask = (src_seq == meta_pad_id)
 
+    logging.info(f"Avvio generazione per prompt: {metadata_prompt}. Lunghezza max: {max_len}, min: {min_len}") # Log iniziale
+
     with torch.no_grad():
         memory = model.encode(src_seq, src_padding_mask)
         memory_key_padding_mask = src_padding_mask
         tgt_tokens = torch.tensor([[sos_midi_id]], dtype=torch.long, device=device)
-        generated_eos = False # Flag per tracciare se EOS è stato generato
+        generated_eos = False 
 
-        for i in range(max_len - 1):
+        for i in range(max_len - 1): # max_len -1 perché iniziamo con SOS e generiamo un token alla volta
             tgt_len = tgt_tokens.size(1)
             tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=device, dtype=torch.bool), diagonal=1)
             tgt_padding_mask_step = torch.zeros_like(tgt_tokens, dtype=torch.bool, device=device)
@@ -228,70 +229,70 @@ def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt
             probs = F.softmax(last_logits, dim=-1)
             next_token_id = torch.multinomial(probs, num_samples=1)
 
-            # Non aggiungere EOS se la lunghezza minima non è raggiunta
-            if next_token_id.item() == eos_midi_id and tgt_tokens.size(1) < min_len:
-                # Se generiamo EOS troppo presto, potremmo voler selezionare il secondo token più probabile
-                # o semplicemente ignorare EOS per questo step e lasciare che il ciclo continui.
-                # Per semplicità qui, proviamo a prendere il secondo più probabile se EOS è il primo.
-                # Questa è una strategia, potresti volerne un'altra (es. non fare nulla e sperare che EOS non sia il prossimo).
+            current_length_no_sos = tgt_tokens.size(1) - 1 # Lunghezza attuale dei token generati (escluso SOS)
+
+            if next_token_id.item() == eos_midi_id and current_length_no_sos < min_len:
                 if probs.size(-1) > 1:
                     top_2_probs, top_2_indices = torch.topk(probs, 2, dim=-1)
                     if top_2_indices[0, 0].item() == eos_midi_id:
-                         # Se il più probabile è EOS, prendi il secondo (se esiste)
                         if top_2_indices.size(1) > 1:
                             next_token_id = top_2_indices[0, 1].unsqueeze(0).unsqueeze(0)
-                        else: # Se c'è solo EOS come opzione (improbabile ma possibile)
+                        else:
                             logging.warning("Forzato a generare EOS nonostante min_len non raggiunta, poche opzioni.")
-                            generated_eos = True # Segna che EOS è stato generato
-                            # In questo caso raro, potremmo dover uscire se min_len è strettamente richiesto.
-                            # Oppure aggiungerlo e troncare dopo. Per ora lo aggiungiamo.
+                            generated_eos = True 
                     # else: Non era EOS, quindi next_token_id è già buono
                 # else: solo una scelta possibile
 
             tgt_tokens = torch.cat((tgt_tokens, next_token_id), dim=1)
-            current_length = tgt_tokens.size(1) -1 # -1 per escludere SOS iniziale
+            current_length_generated = tgt_tokens.size(1) -1 
 
-            if next_token_id.item() == eos_midi_id and not generated_eos and current_length >= min_len:
-                logging.info(f"Token EOS generato dopo {i+1} step (e min_len raggiunta).")
+            # --- MODIFICA: LOGGING PROGRESSO ---
+            if (i + 1) % log_progress_every_n_tokens == 0:
+                logging.info(f"Generazione in corso... Token generati: {current_length_generated}/{max_len}")
+            # --- FINE MODIFICA ---
+
+            if next_token_id.item() == eos_midi_id and not generated_eos and current_length_generated >= min_len:
+                logging.info(f"Token EOS generato dopo {current_length_generated} token (e min_len raggiunta).")
                 generated_eos = True
-                break # Esci se EOS è generato E la lunghezza minima è soddisfatta
+                break 
 
-            if generated_eos and current_length < min_len : # Se EOS è stato forzato ma min_len non ancora raggiunta
-                generated_eos = False # Resetta il flag per permettere una generazione futura di EOS
+            if generated_eos and current_length_generated < min_len : 
+                generated_eos = False 
 
-            if current_length >= max_len: # Usa current_length che è il numero di token generati
+            if current_length_generated >= max_len: 
                 logging.info(f"Raggiunta lunghezza massima di generazione ({max_len}).")
+                if not generated_eos: # Se non abbiamo ancora generato EOS
+                     logging.info("Aggiunta forzata del token EOS a max_len.")
+                     # Rimuovi l'ultimo token se non è EOS e aggiungi EOS
+                     # Questa logica è già gestita dopo il ciclo, ma potremmo volerla qui se max_len è rigido.
+                     # Per ora, il post-processing gestirà l'aggiunta di EOS se necessario.
                 break
+    
+    final_tokens = tgt_tokens[0, 1:].tolist() # Rimuovi SOS iniziale
 
-    # Rimuovi SOS iniziale
-    final_tokens = tgt_tokens[0, 1:].tolist()
-
-    # Se EOS è stato generato E la lunghezza minima è stata soddisfatta, potrebbe essere già terminato.
-    # Altrimenti, se EOS non è stato generato o la lunghezza minima non era soddisfatta quando EOS è apparso,
-    # la sequenza potrebbe non avere EOS alla fine.
-    # Potresti voler aggiungere EOS se non presente e min_len è raggiunta.
-    if not generated_eos and len(final_tokens) >= min_len:
-        # Verifica se l'ultimo token è già EOS
+    if not generated_eos and len(final_tokens) >= min_len :
         if final_tokens and final_tokens[-1] != eos_midi_id:
-             # Se non c'è EOS e abbiamo raggiunto max_len, e siamo oltre min_len,
-             # potremmo troncare l'ultimo token e aggiungere EOS, o semplicemente aggiungere EOS.
-             # Qui semplicemente aggiungiamo EOS se non è l'ultimo token.
-             # Considera che aggiungere EOS qui estende la sequenza di 1.
             if len(final_tokens) < max_len :
+                logging.info(f"Aggiunta token EOS alla fine della sequenza (lunghezza: {len(final_tokens)}).")
                 final_tokens.append(eos_midi_id)
-            else: # Se siamo già a max_len, sostituisci l'ultimo con EOS
+            elif len(final_tokens) == max_len: # Se siamo già a max_len, sostituisci l'ultimo con EOS
+                logging.info(f"Sostituzione ultimo token con EOS a max_len (lunghezza: {len(final_tokens)}).")
+                final_tokens[-1] = eos_midi_id
+    elif generated_eos and final_tokens and final_tokens[-1] != eos_midi_id :
+        # Questo scenario dovrebbe essere raro se EOS è stato generato e il ciclo è uscito correttamente.
+        # Ma per sicurezza, se EOS era stato flaggato ma non è l'ultimo token (e siamo oltre min_len).
+        if len(final_tokens) >= min_len:
+            logging.warning(f"EOS era stato flaggato ma non è l'ultimo token. Assicurando EOS alla fine (lunghezza attuale: {len(final_tokens)}).")
+            if len(final_tokens) < max_len:
+                final_tokens.append(eos_midi_id)
+            else:
                 final_tokens[-1] = eos_midi_id
 
 
-    # Se dopo tutto questo, la lunghezza è ancora inferiore a min_len,
-    # significa che il ciclo si è interrotto per max_len prima di raggiungere min_len
-    # o che il modello ha continuato a generare token diversi da EOS ma non abbastanza.
-    # Questo scenario indica che forzare min_len potrebbe essere difficile se il modello
-    # è incline a sequenze brevi o a raggiungere max_len rapidamente.
     if len(final_tokens) < min_len:
         logging.warning(f"Lunghezza finale generata ({len(final_tokens)}) è inferiore a min_len ({min_len}) richiesta.")
-        # Qui potresti decidere di scartare la sequenza, paddarla, o usarla così com'è.
-
+    
+    logging.info(f"Generazione completata. Numero finale di token (inclusi SOS/EOS se presenti): {len(final_tokens)}")
     return final_tokens
 
 # --- Esecuzione Principale per la Sola Generazione ---
@@ -319,7 +320,6 @@ if __name__ == "__main__":
         logging.error("ERRORE: 'model_params' non trovato nel checkpoint. Impossibile ricostruire il modello.")
         sys.exit(1)
     
-    # Verifica consistenza dimensioni vocabolari (opzionale ma consigliato)
     if model_params['src_vocab_size'] != len(metadata_vocab_map):
         logging.warning(f"Dimensione vocabolario metadati del checkpoint ({model_params['src_vocab_size']}) "
                         f"diversa da quella caricata ({len(metadata_vocab_map)}). "
@@ -331,6 +331,11 @@ if __name__ == "__main__":
 
     # 3. Istanzia e Carica il Modello
     logging.info(f"Istanziazione modello con parametri: {model_params}")
+    # Assicurati che max_pe_len sia presente nei model_params o definito globalmente
+    if 'max_pe_len' not in model_params:
+        logging.warning("'max_pe_len' non trovato in model_params. Utilizzo di MAX_SEQ_LEN_MIDI + MAX_SEQ_LEN_META + 100 come fallback.")
+        model_params['max_pe_len'] = MAX_SEQ_LEN_MIDI + MAX_SEQ_LEN_META + 100 # Fallback ragionevole
+        
     model = Seq2SeqTransformer(**model_params).to(DEVICE)
     
     try:
@@ -341,60 +346,63 @@ if __name__ == "__main__":
         logging.error("Verifica che i parametri in 'model_params' corrispondano esattamente all'architettura salvata.")
         sys.exit(1)
         
-    model.eval() # IMPORTANTE: imposta il modello in modalità valutazione
+    model.eval()
     logging.info("Modello caricato e impostato in modalità valutazione.")
 
     # 4. Prepara Prompt e Genera
-    # Esempio di prompt metadati (puoi cambiarlo)
     example_metadata_prompt_list = [
         ["Style=Folk", "Key=A_minor", "TimeSig=4/4", "Instrument=Piano", "Instrument=Flute"],
         ["Style=Classical", "Key=C_Major", "TimeSig=4/4", "Instrument=Violin", "Instrument=Cello"],
-        # ... altri prompt
     ]
+
+    # === NUOVA CONFIGURAZIONE PER IL LOGGING DEL PROGRESSO ===
+    # Quanti token generare prima di stampare un messaggio di log sul progresso
+    LOG_PROGRESS_EVERY_N_TOKENS = 200 # Puoi aggiustare questo valore
+    # === ============================================= ===
 
     for idx, example_metadata_prompt in enumerate(example_metadata_prompt_list):
         logging.info(f"--- Generazione {idx+1}/{len(example_metadata_prompt_list)} ---")
-        logging.info(f"Prompt metadati: {example_metadata_prompt}")
+        # Non c'è bisogno di loggare qui il prompt, viene fatto dentro generate_sequence
 
         try:
             generated_token_ids = generate_sequence(
                 model, midi_tokenizer, metadata_vocab_map, example_metadata_prompt,
-                max_len=MAX_SEQ_LEN_MIDI, 
+                max_len=MAX_SEQ_LEN_MIDI, # Usa la costante definita sopra
+                min_len=2000, # Esempio di min_len, aggiusta se necessario
                 temperature=0.75,
                 top_k=40,
-                device=DEVICE
+                device=DEVICE,
+                log_progress_every_n_tokens=LOG_PROGRESS_EVERY_N_TOKENS # Passa la frequenza di log
             )
 
             if generated_token_ids:
-                logging.info(f"Generati {len(generated_token_ids)} token MIDI.")
+                logging.info(f"Generati {len(generated_token_ids)} token MIDI per prompt {idx+1}.")
                 
-                # Decodifica i token in un oggetto Score SENZA salvare immediatamente
                 generated_midi_object = midi_tokenizer.decode(generated_token_ids)
                 
-                if generated_midi_object: # Se la decodifica ha successo
+                if generated_midi_object:
                     timestamp = time.strftime("%Y%m%d-%H%M%S")
                     prompt_name_part = "_".join(example_metadata_prompt).replace("=", "").replace("/", "").replace("Style", "").replace("Key", "").replace("TimeSig","").replace("Title","")
                     prompt_name_part = ''.join(c for c in prompt_name_part if c.isalnum() or c == '_')[:50]
                     
                     output_filename_path = GENERATION_OUTPUT_DIR / f"generated_{prompt_name_part}_{timestamp}_{idx}.mid"
 
-                    # Assicurati che la directory di output esista (già fatto all'inizio, ma per sicurezza)
                     GENERATION_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                     
-                    logging.info(f"Tentativo di salvare il MIDI generato (con workaround) in: {output_filename_path}")
-                    # Salva manualmente l'oggetto Score
+                    logging.info(f"Tentativo di salvare il MIDI generato in: {output_filename_path}")
                     generated_midi_object.dump_midi(str(output_filename_path))
-                    logging.info(f"File MIDI salvato con workaround in: {output_filename_path}")
+                    logging.info(f"File MIDI salvato in: {output_filename_path}")
                 else:
-                    logging.warning(f"midi_tokenizer.decode ha restituito None per prompt '{example_metadata_prompt}', impossibile salvare.")
+                    logging.warning(f"midi_tokenizer.decode ha restituito None per prompt '{example_metadata_prompt}' (prompt {idx+1}), impossibile salvare.")
 
             else:
-                logging.warning(f"Generazione per prompt '{example_metadata_prompt}' fallita o ha prodotto una sequenza vuota di token ID.")
+                logging.warning(f"Generazione per prompt '{example_metadata_prompt}' (prompt {idx+1}) fallita o ha prodotto una sequenza vuota di token ID.")
         
         except Exception as e:
-            logging.error(f"Errore durante la generazione o il salvataggio per prompt '{example_metadata_prompt}': {e}", exc_info=True)
+            logging.error(f"Errore durante la generazione o il salvataggio per prompt '{example_metadata_prompt}' (prompt {idx+1}): {e}", exc_info=True)
         
         if idx < len(example_metadata_prompt_list) - 1:
+            logging.info(f"Attesa di 1 secondo prima della prossima generazione...")
             time.sleep(1)
 
     logging.info("--- Script di Generazione Terminato ---")
