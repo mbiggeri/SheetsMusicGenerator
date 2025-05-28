@@ -76,12 +76,12 @@ META_SOS_TOKEN_NAME = "<sos_meta>"
 META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
-EPOCHS = 25
+EPOCHS = 10
 BATCH_SIZE = 64 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
-EMB_SIZE = 512 # Dimensione embedding
-NHEAD = 8 # Numero di head nell'attention (deve dividere EMB_SIZE)
-FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
+EMB_SIZE = 256 # Dimensione embedding
+NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
+FFN_HID_DIM = 256 # Dimensione layer nascosto FeedForward
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
 DROPOUT = 0.1
