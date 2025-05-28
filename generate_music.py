@@ -15,7 +15,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODIFICA QUESTI PERCORSI ===
 # Percorso del checkpoint del modello addestrato (.pt)
-PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Downloads\transformer_mutopia_epoch3_valloss1.9265_20250528-113813.pt")
+PATH_MODELLO_CHECKPOINT = Path(r"C:\Users\Michael\Downloads\transformer_mutopia_epoch10_valloss1.7203_20250528-131159.pt")
 # Percorso del file di vocabolario MIDI (.json) usato per addestrare il modello sopra
 PATH_VOCAB_MIDI = Path(r"C:\Users\Michael\Desktop\SheetsMusicGenerator\ModelloPiccolo\midi_vocab.json")
 # Percorso del file di vocabolario dei metadati (.json) usato per addestrare il modello sopra
@@ -52,6 +52,10 @@ PRIMER_TOKEN_COUNT = 50  # Quanti token usare dalla fine del chunk precedente co
                           # Deve essere minore di effective_model_max_len
 MIN_TOKENS_PER_CHUNK = 100 # Lunghezza minima per un chunk prima di accettare EOS
                            # o per continuare la generazione
+                           
+TOTAL_MIDI_TARGET_LENGTH = 1024 # lunghezza totale desiderata in token
+                                # Aumenta questo valore per brani più lunghi.
+                                # Se è più grande di effective_model_chunk_capacity, verranno generati più chunk.
 
 # Setup Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -470,10 +474,6 @@ if __name__ == "__main__":
     logging.info("Modello caricato e impostato in modalità valutazione.")
 
     # 4. Prepara Prompt e Genera
-    TOTAL_MIDI_TARGET_LENGTH = 8000 # Esempio: lunghezza totale desiderata in token
-                                      # Aumenta questo valore per brani più lunghi.
-                                      # Se è più grande di effective_model_chunk_capacity, verranno generati più chunk.
-
     example_metadata_prompt_list = [
         ["Style=Folk", "Key=A_minor", "TimeSig=4/4", "Instrument=Piano", "Instrument=Flute", "BPM_120", "AvgVel_Media_45-80"],
         ["Style=Classical", "Key=C_Major", "TimeSig=4/4", "Instrument=Violin", "Instrument=Cello", "BPM_80", "VelRange_Ampio_55+"],

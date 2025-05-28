@@ -28,6 +28,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Percorsi base per i dataset
 DATA_DIR_MUTOPIA = Path("/content/SheetsMusicGenerator/mutopia_data")
 DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_of_MIDI") # Come specificato
+#DATA_DIR_MUTOPIA = Path("./mutopia_data")
+#DATA_DIR_MAGICMIDI = Path("./The_Magic_of_MIDI") # Come specificato
 
 # Imposta DATA_DIR di default (mutopia)
 DATA_DIR = DATA_DIR_MUTOPIA
@@ -76,16 +78,16 @@ META_SOS_TOKEN_NAME = "<sos_meta>"
 META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
-EPOCHS = 10
-BATCH_SIZE = 64 # Riduci se hai poca memoria GPU
+EPOCHS = 20
+BATCH_SIZE = 32 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
-EMB_SIZE = 512 # Dimensione embedding
-NHEAD = 8 # Numero di head nell'attention (deve dividere EMB_SIZE)
-FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
-NUM_ENCODER_LAYERS = 3
-NUM_DECODER_LAYERS = 3
+EMB_SIZE = 128 # Dimensione embedding
+NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
+FFN_HID_DIM = 256 # Dimensione layer nascosto FeedForward
+NUM_ENCODER_LAYERS = 2
+NUM_DECODER_LAYERS = 2
 DROPOUT = 0.1
-MAX_SEQ_LEN_MIDI = 1024 # Lunghezza massima sequenza MIDI (tronca/scarta se più lunga)
+MAX_SEQ_LEN_MIDI = 512 # Lunghezza massima sequenza MIDI (suddivide in più chunks se più lunga)
 MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
 # Programmi MIDI considerati come "pianoforte"
