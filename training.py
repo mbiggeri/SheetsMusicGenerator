@@ -79,13 +79,13 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 EPOCHS = 10
 BATCH_SIZE = 64 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
-EMB_SIZE = 256 # Dimensione embedding
-NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
-FFN_HID_DIM = 256 # Dimensione layer nascosto FeedForward
+EMB_SIZE = 512 # Dimensione embedding
+NHEAD = 8 # Numero di head nell'attention (deve dividere EMB_SIZE)
+FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
 DROPOUT = 0.1
-MAX_SEQ_LEN_MIDI = 8192 # Lunghezza massima sequenza MIDI (tronca/scarta se più lunga)
+MAX_SEQ_LEN_MIDI = 1024 # Lunghezza massima sequenza MIDI (tronca/scarta se più lunga)
 MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
 # Programmi MIDI considerati come "pianoforte"
@@ -274,22 +274,25 @@ def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
 
 class MutopiaDataset(Dataset):
     def __init__(self, jsonl_path, midi_base_dir, midi_tokenizer, metadata_vocab_map,
-                 max_len_midi, max_len_meta, filter_key=None):
+                 max_len_midi, max_len_meta, filter_key=None,
+                 min_chunk_len_midi=50): # Aggiunto min_chunk_len_midi
         self.midi_base_dir = Path(midi_base_dir)
         self.midi_tokenizer = midi_tokenizer
         self.metadata_vocab_map = metadata_vocab_map
-        self.max_len_midi = max_len_midi
+        self.max_len_midi = max_len_midi # Questa ora è la lunghezza del chunk
         self.max_len_meta = max_len_meta
         self.filter_key = filter_key
+        self.min_chunk_len_midi = min_chunk_len_midi # Lunghezza minima per un chunk valido (esclusi SOS/EOS)
 
         try:
             self.meta_pad_id = metadata_vocab_map[META_PAD_TOKEN_NAME]
             self.sos_meta_id = metadata_vocab_map[META_SOS_TOKEN_NAME]
             self.eos_meta_id = metadata_vocab_map[META_EOS_TOKEN_NAME]
             self.unk_meta_id = metadata_vocab_map[META_UNK_TOKEN_NAME]
+            
             self.sos_midi_id = midi_tokenizer[MIDI_SOS_TOKEN_NAME]
             self.eos_midi_id = midi_tokenizer[MIDI_EOS_TOKEN_NAME]
-            self.midi_pad_id = midi_tokenizer[MIDI_PAD_TOKEN_NAME]
+            self.midi_pad_id = midi_tokenizer[MIDI_PAD_TOKEN_NAME] # Necessario per il collate_fn
             if None in [self.sos_midi_id, self.eos_midi_id, self.midi_pad_id,
                         self.meta_pad_id, self.sos_meta_id, self.eos_meta_id, self.unk_meta_id]:
                 raise ValueError("Uno o più ID di token speciali non sono stati trovati.")
@@ -297,82 +300,141 @@ class MutopiaDataset(Dataset):
             logging.error(f"ERRORE CRITICO in Dataset __init__: Token speciale non trovato: {e}")
             raise
 
-        logging.info(f"Caricamento dati da {jsonl_path} per Dataset...")
-        self.data = []
+        logging.info(f"Inizializzazione Dataset da {jsonl_path} con chunking. Max MIDI chunk len: {self.max_len_midi}")
+        self.samples = [] # Questa lista conterrà tuple (src_tensor, tgt_tensor) per ogni chunk
+
         skipped_missing_midi_file = 0
-        # ... (altri contatori di skip)
+        skipped_key_filter = 0
+        skipped_no_relative_path = 0
+        skipped_midi_tokenization_error = 0
+        skipped_too_short_after_tokenization = 0
+        processed_files_count = 0
 
         try:
             with open(jsonl_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f):
                     try:
                         entry = json.loads(line)
-                        current_metadata = entry.get('metadata', {})
-                        if self.filter_key and current_metadata.get('key') != self.filter_key:
-                            continue # skipped_key_filter += 1
-                        midi_relative_path_str = current_metadata.get('midi_relative_path')
+                        processed_files_count += 1
+                        actual_metadata = entry.get('metadata', {})
+
+                        if self.filter_key and actual_metadata.get('key') != self.filter_key:
+                            skipped_key_filter += 1
+                            continue
+
+                        midi_relative_path_str = actual_metadata.get('midi_relative_path')
                         if not midi_relative_path_str:
-                            continue # skipped_no_relative_path += 1
-                        midi_relative_path_str = midi_relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
-                        midi_path_check = self.midi_base_dir / midi_relative_path_str
-                        if midi_path_check.exists() and midi_path_check.is_file():
-                            self.data.append(entry)
-                        else:
+                            skipped_no_relative_path += 1
+                            continue
+                        
+                        midi_relative_path_str = midi_relative_path_str.replace("\\", "/")
+                        midi_full_path = self.midi_base_dir / midi_relative_path_str
+
+                        if not midi_full_path.exists() or not midi_full_path.is_file():
                             skipped_missing_midi_file += 1
+                            continue
+
+                        # 1. Prepara la sequenza dei metadati (src)
+                        meta_tokens_str = tokenize_metadata(actual_metadata) # Assicurati che tokenize_metadata sia definita
+                        meta_token_ids = [self.metadata_vocab_map.get(token, self.unk_meta_id) for token in meta_tokens_str]
+                        # Troncamento metadati se necessario
+                        src_seq_list = [self.sos_meta_id] + meta_token_ids[:self.max_len_meta-2] + [self.eos_meta_id]
+                        src_tensor = torch.tensor(src_seq_list, dtype=torch.long)
+
+                        # 2. Tokenizza il MIDI e dividi in chunk (tgt)
+                        score = Score(str(midi_full_path)) # symusic.Score
+                        
+                        # Applica il PROCESSING_MODE qui se necessario prima della tokenizzazione
+                        if PROCESSING_MODE == "piano_only": # Assicurati che PROCESSING_MODE e PIANO_PROGRAMS siano definiti
+                            piano_tracks_presenti = [track for track in score.tracks if track.program in PIANO_PROGRAMS]
+                            if not piano_tracks_presenti:
+                                # Potresti voler loggare questo skip
+                                continue
+                            score.tracks = piano_tracks_presenti
+                            if len(score.tracks) == 0:
+                                continue
+
+                        midi_tokens_output = self.midi_tokenizer(score) # miditok
+                        
+                        # Gestisci l'output del tokenizer (potrebbe essere lista di int o lista di liste)
+                        raw_midi_ids = []
+                        if hasattr(midi_tokens_output, 'ids') and isinstance(midi_tokens_output.ids, list):
+                            if all(isinstance(sublist, list) for sublist in midi_tokens_output.ids): # Es. per multi-traccia non one-token-stream
+                                raw_midi_ids = [item for sublist in midi_tokens_output.ids for item in sublist]
+                            elif all(isinstance(item, int) for item in midi_tokens_output.ids): # Es. REMI o one-token-stream
+                                raw_midi_ids = midi_tokens_output.ids
+                            else:
+                                logging.warning(f"Formato ID MIDI inatteso da tokenizer per {midi_full_path.name}. Saltato.")
+                                skipped_midi_tokenization_error += 1
+                                continue
+                        else:
+                            logging.warning(f"Output tokenizer MIDI non valido per {midi_full_path.name}. Saltato.")
+                            skipped_midi_tokenization_error += 1
+                            continue
+                        
+                        if not raw_midi_ids or len(raw_midi_ids) < self.min_chunk_len_midi:
+                            skipped_too_short_after_tokenization +=1
+                            continue
+
+                        # Logica di Chunking
+                        # -2 per SOS e EOS token per ogni chunk MIDI
+                        effective_chunk_len = self.max_len_midi - 2 
+                        if effective_chunk_len < self.min_chunk_len_midi:
+                            logging.error(f"effective_chunk_len ({effective_chunk_len}) è minore di min_chunk_len_midi ({self.min_chunk_len_midi}). Controlla MAX_SEQ_LEN_MIDI.")
+                            # Potrebbe essere un errore di configurazione, esci o gestisci
+                            raise ValueError("Configurazione lunghezza chunk non valida.")
+
+                        num_chunks = 0
+                        for i in range(0, len(raw_midi_ids), effective_chunk_len):
+                            chunk = raw_midi_ids[i : i + effective_chunk_len]
+                            if len(chunk) < self.min_chunk_len_midi: # Scarta chunk finali troppo corti
+                                if num_chunks == 0: # Se anche il primo chunk è troppo corto, loggalo separatamente
+                                     skipped_too_short_after_tokenization +=1 # Conteggia come file troppo corto
+                                # Altrimenti, il file ha prodotto almeno un chunk valido, ma l'ultimo era corto
+                                break 
+
+                            tgt_seq_list = [self.sos_midi_id] + chunk + [self.eos_midi_id]
+                            tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
+                            self.samples.append((src_tensor, tgt_tensor))
+                            num_chunks += 1
+                        
+                        if num_chunks == 0 and len(raw_midi_ids) >= self.min_chunk_len_midi:
+                            # Questo caso potrebbe verificarsi se min_chunk_len_midi > effective_chunk_len
+                            # già gestito sopra con l'errore, ma per sicurezza.
+                            logging.warning(f"Nessun chunk creato per {midi_full_path.name} nonostante lunghezza sufficiente. ID MIDI: {len(raw_midi_ids)}")
+
+
                     except json.JSONDecodeError:
-                        pass # skipped_json_decode += 1
-                    except Exception:
-                         pass # skipped_other_entry_error += 1
+                        logging.warning(f"Errore decodifica JSON linea {line_num+1} in {jsonl_path}")
+                    except FileNotFoundError: # Dovrebbe essere già gestito sopra, ma per sicurezza
+                        skipped_missing_midi_file += 1
+                    except Exception as e:
+                        logging.error(f"Errore imprevisto processando entry da {jsonl_path} (linea {line_num+1}): {entry.get('metadata', {}).get('midi_relative_path', 'N/A')}. Errore: {e}", exc_info=True)
+                        skipped_midi_tokenization_error += 1 # Conteggio generico per altri errori di processamento MIDI
+
         except FileNotFoundError:
-             logging.error(f"File dataset non trovato: {jsonl_path}")
-             raise
-        logging.info(f"Caricati {len(self.data)} campioni validi. Saltati per MIDI mancante: {skipped_missing_midi_file}")
-        if not self.data:
-            logging.error(f"Nessun dato caricato da {jsonl_path}.")
+            logging.error(f"File dataset non trovato: {jsonl_path}")
+            raise
+        
+        logging.info(f"Dataset inizializzato. Numero totale di chunk (campioni): {len(self.samples)}")
+        logging.info(f"File totali processati dal JSONL: {processed_files_count}")
+        if skipped_missing_midi_file > 0: logging.info(f"File MIDI mancanti: {skipped_missing_midi_file}")
+        if skipped_key_filter > 0: logging.info(f"File saltati per filtro tonalità: {skipped_key_filter}")
+        if skipped_no_relative_path > 0: logging.info(f"File saltati per path relativo mancante: {skipped_no_relative_path}")
+        if skipped_midi_tokenization_error > 0: logging.info(f"File saltati per errori di tokenizzazione/processamento MIDI: {skipped_midi_tokenization_error}")
+        if skipped_too_short_after_tokenization > 0: logging.info(f"File (o loro primi chunk) troppo corti dopo tokenizzazione (meno di {self.min_chunk_len_midi} tokens): {skipped_too_short_after_tokenization}")
+
+        if not self.samples:
+            logging.error(f"Nessun campione (chunk) caricato. Controlla i log e i parametri (MAX_SEQ_LEN_MIDI, min_chunk_len_midi).")
+
 
     def __len__(self):
-        return len(self.data)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        max_retries = 2
-        entry = self.data[idx]
-        actual_metadata = entry.get('metadata', {})
-        midi_relative_path_str = actual_metadata.get('midi_relative_path')
-        if not midi_relative_path_str: return None
-        midi_relative_path_str = midi_relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
-        midi_full_path = self.midi_base_dir / midi_relative_path_str
-
-        for attempt in range(max_retries):
-            try:
-                score = Score(str(midi_full_path))
-                if PROCESSING_MODE == "piano_only":
-                    piano_tracks_presenti = [track for track in score.tracks if track.program in PIANO_PROGRAMS]
-                    if not piano_tracks_presenti: return None
-                    score.tracks = piano_tracks_presenti
-                    if len(score.tracks) == 0: return None
-                
-                meta_tokens_str = tokenize_metadata(actual_metadata)
-                meta_token_ids = [self.metadata_vocab_map.get(token, self.unk_meta_id) for token in meta_tokens_str]
-                src_seq = [self.sos_meta_id] + meta_token_ids[:self.max_len_meta-2] + [self.eos_meta_id]
-                
-                midi_tokens_output = self.midi_tokenizer(score) 
-                if not hasattr(midi_tokens_output, 'ids'): raise RuntimeError("Output tokenizer MIDI malformato")
-                raw_midi_ids = midi_tokens_output.ids
-                if raw_midi_ids is None or not isinstance(raw_midi_ids, list): raise RuntimeError("raw_midi_ids non validi")
-
-                processed_midi_ids = []
-                if len(raw_midi_ids) > 0:
-                    if isinstance(raw_midi_ids[0], int): processed_midi_ids = raw_midi_ids
-                    elif isinstance(raw_midi_ids[0], list): # Caso inatteso per REMI
-                        processed_midi_ids = [item for sublist in raw_midi_ids for item in sublist if isinstance(sublist, list)]
-                    else: raise RuntimeError("Formato ID MIDI inatteso.")
-                
-                if not processed_midi_ids: return None 
-                tgt_seq = [self.sos_midi_id] + processed_midi_ids[:self.max_len_midi-2] + [self.eos_midi_id]
-                return torch.tensor(src_seq, dtype=torch.long), torch.tensor(tgt_seq, dtype=torch.long)
-            except Exception:
-                if attempt + 1 == max_retries: return None
-        return None
+        # Ora restituiamo direttamente il campione pre-elaborato (src_tensor, tgt_tensor)
+        # Non c'è più bisogno di caricare/tokenizzare qui
+        return self.samples[idx]
 
 def pad_collate_fn(batch, meta_pad_id, midi_pad_id):
     batch = [item for item in batch if item is not None]
