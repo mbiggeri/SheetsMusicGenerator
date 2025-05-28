@@ -17,6 +17,7 @@ import time
 import sys
 from functools import partial # IMPORTANTE: Aggiunto per DataLoader collate_fn
 from symusic import Score
+import re
 
 # --- Configurazione del logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -76,7 +77,7 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
 EPOCHS = 25
-BATCH_SIZE = 256 # Riduci se hai poca memoria GPU
+BATCH_SIZE = 64 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
 EMB_SIZE = 512 # Dimensione embedding
 NHEAD = 8 # Numero di head nell'attention (deve dividere EMB_SIZE)
@@ -84,7 +85,7 @@ FFN_HID_DIM = 512 # Dimensione layer nascosto FeedForward
 NUM_ENCODER_LAYERS = 3
 NUM_DECODER_LAYERS = 3
 DROPOUT = 0.1
-MAX_SEQ_LEN_MIDI = 1024 # Lunghezza massima sequenza MIDI (tronca/scarta se più lunga)
+MAX_SEQ_LEN_MIDI = 8192 # Lunghezza massima sequenza MIDI (tronca/scarta se più lunga)
 MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
 # Programmi MIDI considerati come "pianoforte"
@@ -184,10 +185,25 @@ def tokenize_metadata(metadata_dict):
         tokens.append(f"Key={metadata_dict['key'].replace(' ', '_')}")
     if 'time_signature' in metadata_dict and metadata_dict['time_signature']:
         tokens.append(f"TimeSig={metadata_dict['time_signature']}")
-    if 'title' in metadata_dict and metadata_dict['title']:
-        clean_title = metadata_dict['title'].replace(' ', '_').lower()
-        clean_title = ''.join(c for c in clean_title if c.isalnum() or c == '_')
-        tokens.append(f"Title={clean_title[:30]}")
+    instrument_tokens_added = False
+    if 'midi_instruments' in metadata_dict and isinstance(metadata_dict['midi_instruments'], list):
+        # Priorità alla lista di strumenti direttamente dal MIDI se presente e valida
+        for instrument_name in metadata_dict['midi_instruments']:
+            if instrument_name and isinstance(instrument_name, str): # Verifica aggiuntiva
+                clean_instrument_name = instrument_name.replace(' ', '_')
+                tokens.append(f"Instrument={clean_instrument_name}")
+                instrument_tokens_added = True
+    
+    # Fallback a mutopiainstrument se midi_instruments non ha prodotto token
+    if not instrument_tokens_added and 'mutopiainstrument' in metadata_dict and metadata_dict['mutopiainstrument']:
+        instrument_string = metadata_dict['mutopiainstrument']
+        instrument_string_normalized = re.sub(r'\s+and\s+', ', ', instrument_string, flags=re.IGNORECASE)
+        instrument_names_from_ly = [name.strip() for name in instrument_string_normalized.split(',') if name.strip()]
+        
+        for instrument_name in instrument_names_from_ly:
+            if instrument_name:
+                clean_instrument_name = instrument_name.replace(' ', '_')
+                tokens.append(f"Instrument={clean_instrument_name}")
     return tokens
 
 def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
