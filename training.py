@@ -78,8 +78,8 @@ META_SOS_TOKEN_NAME = "<sos_meta>"
 META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
-EPOCHS = 20
-BATCH_SIZE = 32 # Riduci se hai poca memoria GPU
+EPOCHS = 100
+BATCH_SIZE = 512 # Riduci se hai poca memoria GPU
 LEARNING_RATE = 0.0001
 EMB_SIZE = 128 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
@@ -179,33 +179,127 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
          sys.exit(1)
     return tokenizer
 
+Certo, modifichiamo la funzione tokenize_metadata per rimuovere "Style" e per includere invece i nuovi parametri che hai aggiunto al dataset_creator.py (BPM, velocity media, range di velocity) e, opzionalmente, una tokenizzazione del numero di strumenti.
+
+Useremo un approccio categoriale per tokenizzare BPM, velocity media e range di velocity, poiché questo generalmente porta a un vocabolario di metadati più gestibile e a una migliore generalizzazione da parte del modello rispetto all'uso di valori numerici diretti (anche se arrotondati).
+
+Ecco la funzione tokenize_metadata modificata. Ricorda di aggiungere import re all'inizio del file Python in cui definisci questa funzione, se non è già presente, per la parte di fallback a mutopiainstrument.
+Python
+
+import re # Assicurati che questa importazione sia presente all'inizio del tuo file .py
+
 def tokenize_metadata(metadata_dict):
     tokens = []
-    if 'style' in metadata_dict and metadata_dict['style']:
-        tokens.append(f"Style={metadata_dict['style'].replace(' ', '_')}")
+
+    # 1. Tonalità (Key) - Invariato
     if 'key' in metadata_dict and metadata_dict['key']:
         tokens.append(f"Key={metadata_dict['key'].replace(' ', '_')}")
+
+    # 2. Metro (Time Signature) - Invariato
     if 'time_signature' in metadata_dict and metadata_dict['time_signature']:
         tokens.append(f"TimeSig={metadata_dict['time_signature']}")
-    instrument_tokens_added = False
+
+    # 3. BPM (Battiti Per Minuto) - Nuovo, categorizzato
+    if 'bpm_rounded' in metadata_dict and metadata_dict['bpm_rounded'] is not None:
+        bpm = metadata_dict['bpm_rounded']
+        if bpm <= 0: # Improbabile ma gestiamo
+            token_bpm = "Tempo_Unknown"
+        elif bpm <= 60:
+            token_bpm = "Tempo_VerySlow"  # (es. Largo, Grave)
+        elif bpm <= 76: # Fino a Adagio
+            token_bpm = "Tempo_Slow"
+        elif bpm <= 108: # Fino a Andante/Moderato
+            token_bpm = "Tempo_Moderate"
+        elif bpm <= 132: # Fino a Allegro
+            token_bpm = "Tempo_Fast"
+        elif bpm <= 168: # Fino a Vivace/Presto
+            token_bpm = "Tempo_VeryFast"
+        else: # Prestissimo
+            token_bpm = "Tempo_ExtremelyFast"
+        tokens.append(token_bpm)
+
+    # 4. Velocity Media - Nuovo, categorizzato
+    if 'avg_velocity_rounded' in metadata_dict and metadata_dict['avg_velocity_rounded'] is not None:
+        avg_vel = metadata_dict['avg_velocity_rounded']
+        if avg_vel < 0 : token_avg_vel = "AvgVel_Unknown" # Improbabile
+        elif avg_vel <= 35: # Pianissimo (pp) / Piano (p)
+            token_avg_vel = "AvgVel_VeryLow"
+        elif avg_vel <= 60: # MezzoPiano (mp)
+            token_avg_vel = "AvgVel_Low"
+        elif avg_vel <= 85: # MezzoForte (mf)
+            token_avg_vel = "AvgVel_Medium"
+        elif avg_vel <= 110: # Forte (f)
+            token_avg_vel = "AvgVel_High"
+        else: # Fortissimo (ff)
+            token_avg_vel = "AvgVel_VeryHigh"
+        tokens.append(token_avg_vel)
+
+    # 5. Range di Velocity - Nuovo, categorizzato
+    if 'velocity_range_rounded' in metadata_dict and metadata_dict['velocity_range_rounded'] is not None:
+        vel_range = metadata_dict['velocity_range_rounded']
+        if vel_range < 0: token_vel_range = "VelRange_Unknown" # Improbabile
+        elif vel_range <= 15: # Poca variazione dinamica
+            token_vel_range = "VelRange_Narrow"
+        elif vel_range <= 40:
+            token_vel_range = "VelRange_Medium"
+        elif vel_range <= 70:
+            token_vel_range = "VelRange_Wide"
+        else: # Variazione dinamica molto ampia
+            token_vel_range = "VelRange_VeryWide"
+        tokens.append(token_vel_range)
+
+    # 6. Numero di Strumenti (Opzionale, ma può essere utile per lo "stile")
+    num_instruments = 0
     if 'midi_instruments' in metadata_dict and isinstance(metadata_dict['midi_instruments'], list):
-        # Priorità alla lista di strumenti direttamente dal MIDI se presente e valida
+        num_instruments = len(metadata_dict['midi_instruments'])
+    
+    if num_instruments == 0:
+        token_num_inst = "NumInst_None" # O potresti ometterlo
+    elif num_instruments == 1:
+        token_num_inst = "NumInst_Solo"
+    elif num_instruments == 2:
+        token_num_inst = "NumInst_Duet"
+    elif num_instruments <= 4: # Trio, Quartetto
+        token_num_inst = "NumInst_SmallChamber"
+    elif num_instruments <= 8: # Ensemble piccolo/medio
+        token_num_inst = "NumInst_MediumEnsemble"
+    else: # Ensemble grande
+        token_num_inst = "NumInst_LargeEnsemble"
+    tokens.append(token_num_inst)
+
+
+    # 7. Nomi degli Strumenti (Logica precedente, adattata per chiarezza)
+    instrument_tokens_added_from_midi_list = False
+    if 'midi_instruments' in metadata_dict and isinstance(metadata_dict['midi_instruments'], list) and metadata_dict['midi_instruments']:
+        # Priorità alla lista di strumenti direttamente dal MIDI se presente e valida e non vuota
         for instrument_name in metadata_dict['midi_instruments']:
             if instrument_name and isinstance(instrument_name, str): # Verifica aggiuntiva
-                clean_instrument_name = instrument_name.replace(' ', '_')
-                tokens.append(f"Instrument={clean_instrument_name}")
-                instrument_tokens_added = True
+                # Pulisci il nome dello strumento per creare un token valido
+                # Rimuovi caratteri speciali, spazi, normalizza case se necessario.
+                # Qui usiamo una pulizia semplice.
+                clean_instrument_name = instrument_name.replace(' ', '_').replace('(', '').replace(')', '').replace('#','sharp')
+                clean_instrument_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_instrument_name) # Mantieni solo alfanumerici e underscore
+                if clean_instrument_name: # Assicurati che non sia vuoto dopo la pulizia
+                    tokens.append(f"Instrument={clean_instrument_name}")
+                    instrument_tokens_added_from_midi_list = True
     
     # Fallback a mutopiainstrument se midi_instruments non ha prodotto token
-    if not instrument_tokens_added and 'mutopiainstrument' in metadata_dict and metadata_dict['mutopiainstrument']:
+    # (o se vuoi che 'mutopiainstrument' aggiunga/sovrascriva - modifica la logica di conseguenza)
+    if not instrument_tokens_added_from_midi_list and 'mutopiainstrument' in metadata_dict and metadata_dict['mutopiainstrument']:
         instrument_string = metadata_dict['mutopiainstrument']
-        instrument_string_normalized = re.sub(r'\s+and\s+', ', ', instrument_string, flags=re.IGNORECASE)
+        # Sostituisci " and " e altri separatori comuni
+        instrument_string_normalized = re.sub(r'\s+(?:and|,|&)\s+', ',', instrument_string, flags=re.IGNORECASE)
+        instrument_string_normalized = re.sub(r'[()]', '', instrument_string_normalized) # Rimuovi parentesi
+
         instrument_names_from_ly = [name.strip() for name in instrument_string_normalized.split(',') if name.strip()]
         
         for instrument_name in instrument_names_from_ly:
             if instrument_name:
-                clean_instrument_name = instrument_name.replace(' ', '_')
-                tokens.append(f"Instrument={clean_instrument_name}")
+                clean_instrument_name = instrument_name.replace(' ', '_').replace('#','sharp')
+                clean_instrument_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_instrument_name)
+                if clean_instrument_name:
+                    tokens.append(f"Instrument={clean_instrument_name}")
+    
     return tokens
 
 def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
