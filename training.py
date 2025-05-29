@@ -4,8 +4,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
-import gc # Importa il modulo garbage collection
-import miditok # Assicurati di installare miditok
+import gc
+import miditok
 from pathlib import Path
 import json
 import math
@@ -178,15 +178,6 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
          logging.error(f"ERRORE CRITICO: Impossibile recuperare gli ID per i seguenti token speciali MIDI: {missing_ids_info}")
          sys.exit(1)
     return tokenizer
-
-Certo, modifichiamo la funzione tokenize_metadata per rimuovere "Style" e per includere invece i nuovi parametri che hai aggiunto al dataset_creator.py (BPM, velocity media, range di velocity) e, opzionalmente, una tokenizzazione del numero di strumenti.
-
-Useremo un approccio categoriale per tokenizzare BPM, velocity media e range di velocity, poiché questo generalmente porta a un vocabolario di metadati più gestibile e a una migliore generalizzazione da parte del modello rispetto all'uso di valori numerici diretti (anche se arrotondati).
-
-Ecco la funzione tokenize_metadata modificata. Ricorda di aggiungere import re all'inizio del file Python in cui definisci questa funzione, se non è già presente, per la parte di fallback a mutopiainstrument.
-Python
-
-import re # Assicurati che questa importazione sia presente all'inizio del tuo file .py
 
 def tokenize_metadata(metadata_dict):
     tokens = []
@@ -369,16 +360,18 @@ def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
 #------------------------
 
 class MutopiaDataset(Dataset):
-    def __init__(self, jsonl_path, midi_base_dir, midi_tokenizer, metadata_vocab_map,
-                 max_len_midi, max_len_meta, filter_key=None,
-                 min_chunk_len_midi=50): # Aggiunto min_chunk_len_midi
-        self.midi_base_dir = Path(midi_base_dir)
-        self.midi_tokenizer = midi_tokenizer
+    def __init__(self, jsonl_path, midi_tokenizer, metadata_vocab_map,
+                 max_len_midi_padded, max_len_meta, filter_key=None,
+                 # min_chunk_len_midi is no longer needed if chunks are pre-filtered
+                 ):
+        # midi_base_dir is no longer strictly needed if we don't load MIDI files here
+        # self.midi_base_dir = Path(midi_base_dir) 
+        self.midi_tokenizer = midi_tokenizer # Still needed for special token IDs
         self.metadata_vocab_map = metadata_vocab_map
-        self.max_len_midi = max_len_midi # Questa ora è la lunghezza del chunk
+        self.max_len_midi_padded = max_len_midi_padded # Max length AFTER SOS/EOS and padding
         self.max_len_meta = max_len_meta
         self.filter_key = filter_key
-        self.min_chunk_len_midi = min_chunk_len_midi # Lunghezza minima per un chunk valido (esclusi SOS/EOS)
+        # self.min_chunk_len_midi = min_chunk_len_midi # Assuming pre-chunked data is already filtered
 
         try:
             self.meta_pad_id = metadata_vocab_map[META_PAD_TOKEN_NAME]
@@ -388,7 +381,7 @@ class MutopiaDataset(Dataset):
             
             self.sos_midi_id = midi_tokenizer[MIDI_SOS_TOKEN_NAME]
             self.eos_midi_id = midi_tokenizer[MIDI_EOS_TOKEN_NAME]
-            self.midi_pad_id = midi_tokenizer[MIDI_PAD_TOKEN_NAME] # Necessario per il collate_fn
+            self.midi_pad_id = midi_tokenizer[MIDI_PAD_TOKEN_NAME]
             if None in [self.sos_midi_id, self.eos_midi_id, self.midi_pad_id,
                         self.meta_pad_id, self.sos_meta_id, self.eos_meta_id, self.unk_meta_id]:
                 raise ValueError("Uno o più ID di token speciali non sono stati trovati.")
@@ -396,140 +389,85 @@ class MutopiaDataset(Dataset):
             logging.error(f"ERRORE CRITICO in Dataset __init__: Token speciale non trovato: {e}")
             raise
 
-        logging.info(f"Inizializzazione Dataset da {jsonl_path} con chunking. Max MIDI chunk len: {self.max_len_midi}")
-        self.samples = [] # Questa lista conterrà tuple (src_tensor, tgt_tensor) per ogni chunk
+        logging.info(f"Inizializzazione Dataset da {jsonl_path} (assumendo dati pre-chunked e pre-tokenizzati).")
+        self.samples = [] 
 
-        skipped_missing_midi_file = 0
         skipped_key_filter = 0
-        skipped_no_relative_path = 0
-        skipped_midi_tokenization_error = 0
-        skipped_too_short_after_tokenization = 0
-        processed_files_count = 0
+        skipped_missing_token_ids = 0
+        skipped_token_ids_too_short_pre_sos_eos = 0 # If any check is needed
+        processed_json_lines = 0
 
         try:
             with open(jsonl_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f):
                     try:
-                        entry = json.loads(line)
-                        processed_files_count += 1
+                        entry = json.loads(line) # Each line is one pre-processed chunk/sample
+                        processed_json_lines += 1
                         actual_metadata = entry.get('metadata', {})
 
                         if self.filter_key and actual_metadata.get('key') != self.filter_key:
                             skipped_key_filter += 1
                             continue
-
-                        midi_relative_path_str = actual_metadata.get('midi_relative_path')
-                        if not midi_relative_path_str:
-                            skipped_no_relative_path += 1
-                            continue
                         
-                        midi_relative_path_str = midi_relative_path_str.replace("\\", "/")
-                        midi_full_path = self.midi_base_dir / midi_relative_path_str
-
-                        if not midi_full_path.exists() or not midi_full_path.is_file():
-                            skipped_missing_midi_file += 1
-                            continue
-
-                        # 1. Prepara la sequenza dei metadati (src)
-                        meta_tokens_str = tokenize_metadata(actual_metadata) # Assicurati che tokenize_metadata sia definita
+                        # 1. Prepara la sequenza dei metadati (src) - same as before
+                        meta_tokens_str = tokenize_metadata(actual_metadata)
                         meta_token_ids = [self.metadata_vocab_map.get(token, self.unk_meta_id) for token in meta_tokens_str]
-                        # Troncamento metadati se necessario
                         src_seq_list = [self.sos_meta_id] + meta_token_ids[:self.max_len_meta-2] + [self.eos_meta_id]
+                        # Padding for src_seq_list will be handled by collate_fn, or do it here if fixed length needed before collate
                         src_tensor = torch.tensor(src_seq_list, dtype=torch.long)
 
-                        # 2. Tokenizza il MIDI e dividi in chunk (tgt)
-                        score = Score(str(midi_full_path)) # symusic.Score
-                        
-                        # Applica il PROCESSING_MODE qui se necessario prima della tokenizzazione
-                        if PROCESSING_MODE == "piano_only": # Assicurati che PROCESSING_MODE e PIANO_PROGRAMS siano definiti
-                            piano_tracks_presenti = [track for track in score.tracks if track.program in PIANO_PROGRAMS]
-                            if not piano_tracks_presenti:
-                                # Potresti voler loggare questo skip
-                                continue
-                            score.tracks = piano_tracks_presenti
-                            if len(score.tracks) == 0:
-                                continue
 
-                        midi_tokens_output = self.midi_tokenizer(score) # miditok
-                        
-                        # Gestisci l'output del tokenizer (potrebbe essere lista di int o lista di liste)
-                        raw_midi_ids = []
-                        if hasattr(midi_tokens_output, 'ids') and isinstance(midi_tokens_output.ids, list):
-                            if all(isinstance(sublist, list) for sublist in midi_tokens_output.ids): # Es. per multi-traccia non one-token-stream
-                                raw_midi_ids = [item for sublist in midi_tokens_output.ids for item in sublist]
-                            elif all(isinstance(item, int) for item in midi_tokens_output.ids): # Es. REMI o one-token-stream
-                                raw_midi_ids = midi_tokens_output.ids
-                            else:
-                                logging.warning(f"Formato ID MIDI inatteso da tokenizer per {midi_full_path.name}. Saltato.")
-                                skipped_midi_tokenization_error += 1
-                                continue
-                        else:
-                            logging.warning(f"Output tokenizer MIDI non valido per {midi_full_path.name}. Saltato.")
-                            skipped_midi_tokenization_error += 1
+                        # 2. Prepara la sequenza MIDI (tgt) da 'token_ids'
+                        # This field must be present in the JSONL if using pre-chunked data
+                        raw_midi_ids_from_json = entry.get('token_ids') 
+                        if raw_midi_ids_from_json is None:
+                            skipped_missing_token_ids +=1
+                            # logging.warning(f"Entry {entry.get('id', 'N/A')} in {jsonl_path} manca 'token_ids'. Saltato.")
+                            if processed_json_lines % 1000 == 0: # Log occasionally
+                                logging.warning(f"Entry {entry.get('id', 'N/A')} in {jsonl_path} (line ~{line_num+1}) manca 'token_ids'. Saltato.")
                             continue
                         
-                        if not raw_midi_ids or len(raw_midi_ids) < self.min_chunk_len_midi:
-                            skipped_too_short_after_tokenization +=1
-                            continue
+                        # Optional: if MIN_CHUNK_LEN_MIDI_TOKENS was a soft limit or needs re-check
+                        # if len(raw_midi_ids_from_json) < self.min_chunk_len_midi: # If min_chunk_len_midi is passed and used
+                        #     skipped_token_ids_too_short_pre_sos_eos += 1
+                        #     continue
 
-                        # Logica di Chunking
-                        # -2 per SOS e EOS token per ogni chunk MIDI
-                        effective_chunk_len = self.max_len_midi - 2 
-                        if effective_chunk_len < self.min_chunk_len_midi:
-                            logging.error(f"effective_chunk_len ({effective_chunk_len}) è minore di min_chunk_len_midi ({self.min_chunk_len_midi}). Controlla MAX_SEQ_LEN_MIDI.")
-                            # Potrebbe essere un errore di configurazione, esci o gestisci
-                            raise ValueError("Configurazione lunghezza chunk non valida.")
-
-                        num_chunks = 0
-                        for i in range(0, len(raw_midi_ids), effective_chunk_len):
-                            chunk = raw_midi_ids[i : i + effective_chunk_len]
-                            if len(chunk) < self.min_chunk_len_midi: # Scarta chunk finali troppo corti
-                                if num_chunks == 0: # Se anche il primo chunk è troppo corto, loggalo separatamente
-                                     skipped_too_short_after_tokenization +=1 # Conteggia come file troppo corto
-                                # Altrimenti, il file ha prodotto almeno un chunk valido, ma l'ultimo era corto
-                                break 
-
-                            tgt_seq_list = [self.sos_midi_id] + chunk + [self.eos_midi_id]
-                            tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
-                            self.samples.append((src_tensor, tgt_tensor))
-                            num_chunks += 1
+                        # Add SOS/EOS and truncate if necessary to fit max_len_midi_padded
+                        # max_len_midi_padded includes space for SOS and EOS
+                        max_data_tokens = self.max_len_midi_padded - 2
+                        truncated_midi_ids = raw_midi_ids_from_json[:max_data_tokens]
                         
-                        if num_chunks == 0 and len(raw_midi_ids) >= self.min_chunk_len_midi:
-                            # Questo caso potrebbe verificarsi se min_chunk_len_midi > effective_chunk_len
-                            # già gestito sopra con l'errore, ma per sicurezza.
-                            logging.warning(f"Nessun chunk creato per {midi_full_path.name} nonostante lunghezza sufficiente. ID MIDI: {len(raw_midi_ids)}")
-
+                        tgt_seq_list = [self.sos_midi_id] + truncated_midi_ids + [self.eos_midi_id]
+                        tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
+                        
+                        self.samples.append((src_tensor, tgt_tensor))
 
                     except json.JSONDecodeError:
                         logging.warning(f"Errore decodifica JSON linea {line_num+1} in {jsonl_path}")
-                    except FileNotFoundError: # Dovrebbe essere già gestito sopra, ma per sicurezza
-                        skipped_missing_midi_file += 1
                     except Exception as e:
-                        logging.error(f"Errore imprevisto processando entry da {jsonl_path} (linea {line_num+1}): {entry.get('metadata', {}).get('midi_relative_path', 'N/A')}. Errore: {e}", exc_info=True)
-                        skipped_midi_tokenization_error += 1 # Conteggio generico per altri errori di processamento MIDI
+                        logging.error(f"Errore imprevisto processando entry da {jsonl_path} (linea {line_num+1}): ID {entry.get('id', 'N/A')}. Errore: {e}", exc_info=False) # Set exc_info=True for full trace
 
         except FileNotFoundError:
             logging.error(f"File dataset non trovato: {jsonl_path}")
             raise
         
-        logging.info(f"Dataset inizializzato. Numero totale di chunk (campioni): {len(self.samples)}")
-        logging.info(f"File totali processati dal JSONL: {processed_files_count}")
-        if skipped_missing_midi_file > 0: logging.info(f"File MIDI mancanti: {skipped_missing_midi_file}")
-        if skipped_key_filter > 0: logging.info(f"File saltati per filtro tonalità: {skipped_key_filter}")
-        if skipped_no_relative_path > 0: logging.info(f"File saltati per path relativo mancante: {skipped_no_relative_path}")
-        if skipped_midi_tokenization_error > 0: logging.info(f"File saltati per errori di tokenizzazione/processamento MIDI: {skipped_midi_tokenization_error}")
-        if skipped_too_short_after_tokenization > 0: logging.info(f"File (o loro primi chunk) troppo corti dopo tokenizzazione (meno di {self.min_chunk_len_midi} tokens): {skipped_too_short_after_tokenization}")
+        logging.info(f"Dataset inizializzato. Numero totale di campioni (pre-chunked): {len(self.samples)}")
+        logging.info(f"Linee JSON totali processate: {processed_json_lines}")
+        if skipped_key_filter > 0: logging.info(f"Campioni saltati per filtro tonalità: {skipped_key_filter}")
+        if skipped_missing_token_ids > 0: logging.info(f"Campioni saltati per 'token_ids' mancanti: {skipped_missing_token_ids}")
+        # if skipped_token_ids_too_short_pre_sos_eos > 0: logging.info(f"Campioni saltati per token_ids troppo corti: {skipped_token_ids_too_short_pre_sos_eos}")
+
 
         if not self.samples:
-            logging.error(f"Nessun campione (chunk) caricato. Controlla i log e i parametri (MAX_SEQ_LEN_MIDI, min_chunk_len_midi).")
+            # Potentially critical if no samples loaded, could be due to all files being filtered,
+            # or data format issues (e.g., all missing 'token_ids')
+            logging.error(f"Nessun campione caricato da {jsonl_path}. Controlla i log e il formato del file JSONL.")
 
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        # Ora restituiamo direttamente il campione pre-elaborato (src_tensor, tgt_tensor)
-        # Non c'è più bisogno di caricare/tokenizzare qui
         return self.samples[idx]
 
 def pad_collate_fn(batch, meta_pad_id, midi_pad_id):
@@ -682,38 +620,82 @@ def evaluate(model, criterion, dataloader):
 
 if __name__ == "__main__":
     logging.info("--- Preparazione Tokenizer e Vocabolari ---")
-    train_jsonl_path = SPLITS_DIR / "train.jsonl"
-    all_train_metadata = []
-    midi_files_for_vocab_build = []
+    train_jsonl_path = SPLITS_DIR / "train.jsonl" # This JSONL is now expected to be pre-chunked
+    all_train_metadata_for_vocab = [] # For building metadata vocab
+    # midi_files_for_vocab_build is only needed if tokenizer vocab needs to be built/trained by training.py
+    # If dataset_creator.py guarantees vocab creation, this can be optional.
+    midi_files_for_tokenizer_vocab_build = [] 
 
-    logging.info(f"Inizio lettura {train_jsonl_path} per costruire vocabolari...")
+    logging.info(f"Inizio lettura {train_jsonl_path} per costruire vocabolario metadati (e opzionalmente MIDI tokenizer)...")
     try:
         if not train_jsonl_path.is_file(): raise FileNotFoundError(f"JSONL non trovato: {train_jsonl_path}")
+        
+        # For metadata vocab, we still need to parse the metadata from the training split
+        # For MIDI tokenizer vocab, if it's not built by dataset_creator or needs to be verified/rebuilt
+        # we might need to point to original MIDI files or assume it's done.
+        # For this example, we assume metadata vocab is built here.
+        # MIDI tokenizer is loaded/built using its own path, potentially with a sample of files if building.
+        
+        # Collect all metadata for its vocab
+        # (This part is somewhat redundant if dataset_creator.py uses a similar process for its own needs,
+        # but essential for this script to define its metadata vocab independently or verify it)
+        temp_midi_paths_for_midi_vocab = set() # To get a diverse set for tokenizer BPE if needed
+
         with open(train_jsonl_path, 'r', encoding='utf-8') as f:
-            for line in f:
+            for line_count, line in enumerate(f): # Iterate over a subset for speed if only for vocab
+                if line_count > 20000 and not force_rebuild_vocabs: # Process a limited number of lines for vocab building speed
+                    # if building vocab from many small chunks, this might not be representative of full file metadata
+                    # Consider having a separate metadata dump or point to original files for vocab build
+                    # logging.info("Limiting metadata vocab scan to first 20000 entries for speed.")
+                    # break 
+                    pass # Process all for metadata vocab
+
                 try:
                     entry = json.loads(line)
                     metadata_dict = entry.get('metadata', {})
-                    relative_path_str = metadata_dict.get('midi_relative_path')
-                    if relative_path_str:
-                        relative_path_str = relative_path_str.replace("\\", "/") # Assicura che sia in formato Unix
-                        midi_full_path_str = str(MIDI_BASE_DIR / relative_path_str)
-                        if Path(midi_full_path_str).is_file():
-                            midi_files_for_vocab_build.append(midi_full_path_str)
-                            all_train_metadata.append(metadata_dict)
+                    all_train_metadata_for_vocab.append(metadata_dict)
+                    
+                    # If MIDI tokenizer needs BPE training and vocab isn't final from dataset_creator
+                    # we might need to collect original MIDI paths.
+                    # However, with pre-chunking, this script relies on `VOCAB_PATH`.
+                    # We can pass a sample of original MIDI files if `VOCAB_PATH` needs to be created here.
+                    # This part becomes more complex if `dataset_creator.py` and `training.py` don't share `VOCAB_PATH`
+                    # For now, assume `build_or_load_tokenizer` handles its own file needs if `VOCAB_PATH` is missing.
+
                 except json.JSONDecodeError: pass
                 except Exception: pass
+        
+        # Example: If VOCAB_PATH (for MIDI) might not exist, gather some source MIDI files
+        # This step is ideally done by dataset_creator or a dedicated vocab script
+        if not VOCAB_PATH.exists(): # Or if force_rebuild_vocabs
+            logging.info("MIDI vocab might need building. Trying to find original MIDI files from dataset (example).")
+            # This is a conceptual step: find original files referenced in train_jsonl_path
+            # For simplicity, we'll assume dataset_creator.py created the vocab,
+            # or we pass a generic list of MIDI files if building here from scratch.
+            # Example: scan MIDI_BASE_DIR for a few files
+            candidate_files = list(MIDI_BASE_DIR.rglob("*.mid")) + list(MIDI_BASE_DIR.rglob("*.midi"))
+            if candidate_files:
+                 midi_files_for_tokenizer_vocab_build = [str(p) for p in random.sample(candidate_files, min(len(candidate_files), 200))] # sample 200
+                 logging.info(f"Using {len(midi_files_for_tokenizer_vocab_build)} sample MIDI files if vocab needs building.")
+
+
     except Exception as e:
-        logging.error(f"ERRORE CRITICO lettura {train_jsonl_path}: {e}", exc_info=True)
+        logging.error(f"ERRORE CRITICO lettura {train_jsonl_path} per vocabolari: {e}", exc_info=True)
         sys.exit(1)
 
-    if not midi_files_for_vocab_build:
-        logging.error("ERRORE CRITICO: Nessun file MIDI per tokenizer.")
-        sys.exit(1)
+    if not all_train_metadata_for_vocab:
+        logging.error("ERRORE CRITICO: Nessun metadato per vocabolario metadati.")
+        # This could happen if train.jsonl is empty or malformed.
+        # sys.exit(1) # Allow to proceed if metadata vocab can be loaded
 
-    force_rebuild_vocabs = False # Reimposta a False dopo il primo run di successo!
-    midi_tokenizer = build_or_load_tokenizer(midi_file_paths=midi_files_for_vocab_build, force_build=force_rebuild_vocabs)
-    metadata_vocab_map, _ = build_or_load_metadata_vocab(all_train_metadata, force_build=force_rebuild_vocabs)
+    force_rebuild_vocabs = False # Set to True to rebuild both vocabs if needed
+    
+    # midi_tokenizer will load from VOCAB_PATH or build if files are provided and force_build=True
+    midi_tokenizer = build_or_load_tokenizer(
+        midi_file_paths=midi_files_for_tokenizer_vocab_build if not VOCAB_PATH.exists() or force_rebuild_vocabs else None, 
+        force_build=force_rebuild_vocabs
+    )
+    metadata_vocab_map, _ = build_or_load_metadata_vocab(all_train_metadata_for_vocab, force_build=force_rebuild_vocabs)
 
     MIDI_VOCAB_SIZE = len(midi_tokenizer)
     META_VOCAB_SIZE = len(metadata_vocab_map)
@@ -721,132 +703,155 @@ if __name__ == "__main__":
         MIDI_PAD_ID = midi_tokenizer[MIDI_PAD_TOKEN_NAME]
         META_PAD_ID = metadata_vocab_map[META_PAD_TOKEN_NAME]
     except KeyError as e:
-        logging.error(f"ERRORE CRITICO: Token PAD non trovato: {e}")
+        logging.error(f"ERRORE CRITICO: Token PAD non trovato dopo inizializzazione vocabolari: {e}")
         sys.exit(1)
 
     logging.info(f"MIDI Vocab Size: {MIDI_VOCAB_SIZE}, MIDI PAD ID: {MIDI_PAD_ID}")
     logging.info(f"Meta Vocab Size: {META_VOCAB_SIZE}, Meta PAD ID: {META_PAD_ID}")
 
-    logging.info("--- Creazione Dataset e DataLoader ---")
+    logging.info("--- Creazione Dataset e DataLoader (con dati pre-chunked) ---")
     try:
-        train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", MIDI_BASE_DIR, midi_tokenizer, metadata_vocab_map, MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
-        val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", MIDI_BASE_DIR, midi_tokenizer, metadata_vocab_map, MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
+        # Pass MAX_SEQ_LEN_MIDI as max_len_midi_padded.
+        # midi_base_dir is removed as it's not used by Dataset if data is pre-chunked.
+        train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, 
+                                     MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
+        val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map,
+                                   MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
     except Exception as e:
         logging.error(f"Errore creazione Dataset: {e}", exc_info=True)
         sys.exit(1)
 
     if len(train_dataset) == 0:
-         logging.error("Dataset di training vuoto.")
+         logging.error("Dataset di training vuoto. Controllare file JSONL e filtri.")
          sys.exit(1)
+    if len(val_dataset) == 0:
+         logging.warning("Dataset di validazione vuoto. Controllare file JSONL e filtri.")
+         # Potrebbe essere accettabile non avere un val set, ma di solito non è voluto.
 
     collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn_with_padding_ids, num_workers=12)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn_with_padding_ids, num_workers=12)
+    # Adjust num_workers based on your system.
+    # If experiencing issues with DataLoader (especially on Windows or with many workers), reduce num_workers, even to 0.
+    num_dataloader_workers = 2 if os.name != 'nt' else 0 # Fewer workers on Windows often helps
+    logging.info(f"Using {num_dataloader_workers} workers for DataLoaders.")
+
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
+                                collate_fn=collate_fn_with_padding_ids, num_workers=num_dataloader_workers, persistent_workers=bool(num_dataloader_workers > 0))
+    if len(val_dataset) > 0:
+        val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
+                                  collate_fn=collate_fn_with_padding_ids, num_workers=num_dataloader_workers, persistent_workers=bool(num_dataloader_workers > 0))
+    else:
+        val_dataloader = None # Handle case with no validation data
 
     logging.info("--- Inizializzazione Modello ---")
-    # Calcola max_pe_len da usare
-    max_pe_len_calculated = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 # +100 come buffer (o un valore che sai essere sufficiente)
+    max_pe_len_calculated = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 
 
     model = Seq2SeqTransformer(
         NUM_ENCODER_LAYERS, NUM_DECODER_LAYERS, EMB_SIZE, NHEAD,
         META_VOCAB_SIZE, MIDI_VOCAB_SIZE, 
-        max_pe_len=max_pe_len_calculated, # Passa il max_pe_len calcolato
+        max_pe_len=max_pe_len_calculated, 
         dim_feedforward=FFN_HID_DIM, dropout=DROPOUT
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
+    criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID) # MIDI_PAD_ID from midi_tokenizer
     logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     logging.info(f"Device: {DEVICE}")
     
     model_params_to_save = {
-    'num_encoder_layers': NUM_ENCODER_LAYERS,
-    'num_decoder_layers': NUM_DECODER_LAYERS,
-    'emb_size': EMB_SIZE,
-    'nhead': NHEAD,
-    'src_vocab_size': META_VOCAB_SIZE,
-    'tgt_vocab_size': MIDI_VOCAB_SIZE,
-    'dim_feedforward': FFN_HID_DIM,
-    'dropout': DROPOUT,
-    'max_pe_len': max_pe_len_calculated
+        'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
+        'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE,
+        'tgt_vocab_size': MIDI_VOCAB_SIZE, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
+        'max_pe_len': max_pe_len_calculated
     }
-    
     vocab_info_to_save = {
-        'midi_vocab_path': str(VOCAB_PATH),
-        'metadata_vocab_path': str(METADATA_VOCAB_PATH),
-        'midi_pad_id': MIDI_PAD_ID,
-        'meta_pad_id': META_PAD_ID,
-        'MAX_SEQ_LEN_MIDI': MAX_SEQ_LEN_MIDI,
-        'MAX_SEQ_LEN_META': MAX_SEQ_LEN_META
+        'midi_vocab_path': str(VOCAB_PATH), 'metadata_vocab_path': str(METADATA_VOCAB_PATH),
+        'midi_pad_id': MIDI_PAD_ID, 'meta_pad_id': META_PAD_ID,
+        'MAX_SEQ_LEN_MIDI': MAX_SEQ_LEN_MIDI, 'MAX_SEQ_LEN_META': MAX_SEQ_LEN_META,
+        'midi_tokenizer_strategy': MIDI_TOKENIZER_STRATEGY.__name__ # Store strategy name
     }
 
     logging.info("--- Inizio Addestramento ---")
     best_val_loss = float('inf')
     epochs_no_improve = 0
-    patience = 5
-    last_saved_epoch = 0 # Per tenere traccia dell'ultima epoca in cui è stato salvato un checkpoint periodico
+    patience = 10 # Increased patience
+    last_saved_epoch = 0 
 
     for epoch in range(1, EPOCHS + 1):
         logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
         start_time_epoch = time.time()
         train_loss_epoch = train_epoch(model, optimizer, criterion, train_dataloader)
-        val_loss_epoch = evaluate(model, criterion, val_dataloader) # val_loss_epoch è la loss di validazione dell'epoca corrente
+        
+        current_val_loss = float('inf') # Default if no val_dataloader
+        if val_dataloader:
+            current_val_loss = evaluate(model, criterion, val_dataloader)
+        
         epoch_duration_total = time.time() - start_time_epoch
-        logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {val_loss_epoch:.4f} (Durata: {epoch_duration_total:.2f}s)")
+        logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {current_val_loss:.4f} (Durata: {epoch_duration_total:.2f}s)")
 
-        # --- Logica di salvataggio checkpoint ---
-        # Salva un checkpoint ogni 10 epoche
-        if epoch % 10 == 0:
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            periodic_model_filename = f"transformer_mutopia_epoch{epoch}_valloss{val_loss_epoch:.4f}_{timestamp}.pt"
+        timestamp = time.strftime("%Y%m%d-%H%M%S") # For unique filenames
+        
+        # Checkpoint saving logic
+        is_best_model = current_val_loss < best_val_loss
+        if is_best_model and val_dataloader: # Only save best if val_dataloader exists and loss improved
+            best_val_loss = current_val_loss
+            epochs_no_improve = 0
+            best_model_filename = f"transformer_best_epoch{epoch}_valloss{best_val_loss:.4f}_{timestamp}.pt"
+            best_model_path = MODEL_SAVE_DIR / best_model_filename
+            logging.info(f"Nuova best validation loss: {best_val_loss:.4f}. Salvataggio modello in {best_model_path}")
+            torch.save({
+                'epoch': epoch, 'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'current_val_loss': current_val_loss, 'best_val_loss': best_val_loss,
+                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
+            }, best_model_path)
+            last_saved_epoch = epoch # Also counts as a save
+        elif val_dataloader: # If val_dataloader exists but no improvement
+            epochs_no_improve += 1
+            logging.info(f"Validation loss non migliorata ({current_val_loss:.4f} vs best {best_val_loss:.4f}). Epoche senza miglioramento: {epochs_no_improve}/{patience}")
+        
+        # Periodic saving every 10 epochs, regardless of improvement (if not just saved as best)
+        if epoch % 10 == 0 and epoch != last_saved_epoch:
+            periodic_model_filename = f"transformer_periodic_epoch{epoch}_valloss{current_val_loss:.4f}_{timestamp}.pt"
             periodic_model_path = MODEL_SAVE_DIR / periodic_model_filename
             logging.info(f"Salvataggio checkpoint periodico (epoch {epoch}): {periodic_model_path}")
             torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'epoch': epoch, 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'current_val_loss': val_loss_epoch, # Validation loss di questa epoca
-                'best_val_loss': best_val_loss,     # Migliore validation loss vista finora (per early stopping)
-                'model_params': model_params_to_save,
-                'vocab_info': vocab_info_to_save
+                'current_val_loss': current_val_loss, 'best_val_loss': best_val_loss, 
+                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
             }, periodic_model_path)
             last_saved_epoch = epoch
-
-        # --- Logica di Early stopping ---
-        if val_loss_epoch < best_val_loss:
-            logging.info(f"Validation loss migliorata da {best_val_loss:.4f} a {val_loss_epoch:.4f}.")
-            best_val_loss = val_loss_epoch
-            epochs_no_improve = 0
-            # Non salviamo più il "best_model" qui ad ogni miglioramento,
-            # ma continuiamo a tracciare best_val_loss per l'early stopping.
-        else:
-            epochs_no_improve += 1
-            logging.info(f"Validation loss non migliorata ({val_loss_epoch:.4f} vs best {best_val_loss:.4f}). Epoche senza miglioramento: {epochs_no_improve}/{patience}")
-
-        if epochs_no_improve >= patience:
+        
+        # Early stopping if val_dataloader exists
+        if val_dataloader and epochs_no_improve >= patience:
             logging.info(f"Nessun miglioramento per {patience} epoche consecutive. Early stopping.")
-            break # Esce dal ciclo di addestramento
+            break 
+        
+        # If no val_dataloader, save periodically or at the end
+        if not val_dataloader and epoch == EPOCHS: # Save last model if no validation
+             # This block might be redundant if periodic save already caught it.
+             pass
+
 
     # --- Salvataggio del modello finale ---
-    # Salva lo stato finale del modello dopo il completamento di tutte le epoche o l'early stopping,
-    # specialmente se l'ultima epoca non era un multiplo di 10.
-    if epoch != last_saved_epoch : # Controlla se l'ultimo stato è già stato salvato periodicamente
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        final_model_filename = f"transformer_mutopia_final_epoch{epoch}_valloss{val_loss_epoch:.4f}_{timestamp}.pt"
+    # Ensure the very last state is saved if it wasn't captured by periodic or best model save.
+    if epoch != last_saved_epoch : 
+        final_timestamp = time.strftime("%Y%m%d-%H%M%S")
+        # Use 'current_val_loss' which holds the last computed validation loss, or train_loss_epoch if no validation
+        loss_metric_for_filename = current_val_loss if val_dataloader else train_loss_epoch
+        final_model_filename = f"transformer_final_epoch{epoch}_loss{loss_metric_for_filename:.4f}_{final_timestamp}.pt"
         final_model_path = MODEL_SAVE_DIR / final_model_filename
         logging.info(f"Salvataggio checkpoint finale (dopo epoch {epoch}): {final_model_path}")
         torch.save({
-            'epoch': epoch, # Ultima epoca completata
-            'model_state_dict': model.state_dict(),
+            'epoch': epoch, 'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'current_val_loss': val_loss_epoch, # Validation loss dell'ultima epoca
-            'best_val_loss': best_val_loss,     # Migliore validation loss generale
-            'model_params': model_params_to_save,
-            'vocab_info': vocab_info_to_save
+            'current_val_loss': current_val_loss, # Last val loss or inf
+            'best_val_loss': best_val_loss,     # Best overall val loss or inf
+            'final_train_loss': train_loss_epoch, # Include final train loss
+            'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
         }, final_model_path)
     else:
-        logging.info(f"Lo stato finale del modello (epoch {epoch}) è già stato salvato come checkpoint periodico.")
-
+        logging.info(f"Lo stato finale del modello (epoch {epoch}) è già stato salvato come checkpoint periodico o migliore.")
 
     logging.info("--- Addestramento Terminato ---")
     logging.info("--- Script Terminato ---")

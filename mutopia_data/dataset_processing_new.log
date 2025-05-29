@@ -1,0 +1,90 @@
+2025-05-28 20:20:03,315 - MainProcess - INFO - --- Dataset Creation Script --- Output Mode: classic ---
+2025-05-28 20:20:03,315 - MainProcess - INFO - Collecting MIDI files to build tokenizer vocabulary...
+2025-05-28 20:20:03,980 - MainProcess - INFO - Creating new MIDI tokenizer configuration...
+2025-05-28 20:20:03,984 - MainProcess - INFO - New tokenizer created, trained (if applicable), and saved to mutopia_data\midi_vocab.json
+2025-05-28 20:20:03,985 - MainProcess - INFO - MIDI Tokenizer ready. Vocab size: 562
+2025-05-28 20:20:03,985 - MainProcess - INFO - --- Fase 1: Elaborazione File MIDI da mutopia_data\midi_files ---
+2025-05-28 20:20:04,651 - MainProcess - INFO - Trovati 1862 file MIDI in mutopia_data\midi_files da elaborare.
+2025-05-28 20:20:04,651 - MainProcess - INFO - Utilizzo di 15 processi worker.
+2025-05-28 20:20:17,430 - MainProcess - INFO - Conteggio finale voci valide (chunks/files): 1847
+2025-05-28 20:20:17,430 - MainProcess - INFO - Dettaglio fallimenti/skip:
+2025-05-28 20:20:17,431 - MainProcess - INFO -   'skipped_mido_missing_metadata': 1
+2025-05-28 20:20:17,431 - MainProcess - INFO -   'skipped_mido_too_few_notes': 12
+2025-05-28 20:20:17,431 - MainProcess - INFO -   'skipped_mido_too_short': 2
+2025-05-28 20:20:17,431 - MainProcess - INFO - Numero totale di entry JSONL prodotte: 1847
+2025-05-28 20:20:17,431 - MainProcess - INFO - --- Fase 2: Divisione del Dataset ---
+2025-05-28 20:20:17,432 - MainProcess - INFO - Dimensioni dataset (numero di entry JSONL): Totale=1847, Train=1477, Validation=184, Test=186
+2025-05-28 20:20:17,443 - MainProcess - INFO - Salvato train.jsonl con 1477 voci.
+2025-05-28 20:20:17,446 - MainProcess - INFO - Salvato validation.jsonl con 184 voci.
+2025-05-28 20:20:17,448 - MainProcess - INFO - Salvato test.jsonl con 186 voci.
+2025-05-28 20:20:17,449 - MainProcess - INFO - --- Script Terminato ---
+2025-05-28 20:25:08,712 - MainProcess - INFO - --- Dataset Creation Script --- Output Mode: classic ---
+2025-05-28 20:25:08,713 - MainProcess - INFO - Collecting MIDI files to build tokenizer vocabulary...
+2025-05-28 20:25:09,415 - MainProcess - INFO - Creating new MIDI tokenizer configuration...
+2025-05-28 20:25:09,419 - MainProcess - INFO - New tokenizer created, trained (if applicable), and saved to mutopia_data\midi_vocab.json
+2025-05-28 20:25:09,419 - MainProcess - INFO - MIDI Tokenizer ready. Vocab size: 562
+2025-05-28 20:25:09,419 - MainProcess - INFO - --- Fase 1: Elaborazione File MIDI da mutopia_data\midi_files ---
+2025-05-28 20:25:10,120 - MainProcess - INFO - Trovati 1862 file MIDI in mutopia_data\midi_files da elaborare.
+2025-05-28 20:25:10,120 - MainProcess - INFO - Utilizzo di 15 processi worker.
+2025-05-28 20:25:23,489 - MainProcess - INFO - Conteggio finale voci valide (chunks/files): 1847
+2025-05-28 20:25:23,490 - MainProcess - INFO - Dettaglio fallimenti/skip:
+2025-05-28 20:25:23,490 - MainProcess - INFO -   'skipped_mido_missing_metadata': 1
+2025-05-28 20:25:23,490 - MainProcess - INFO -   'skipped_mido_too_few_notes': 12
+2025-05-28 20:25:23,490 - MainProcess - INFO -   'skipped_mido_too_short': 2
+2025-05-28 20:25:23,490 - MainProcess - INFO - Numero totale di entry JSONL prodotte: 1847
+2025-05-28 20:25:23,490 - MainProcess - INFO - --- Fase 2: Divisione del Dataset ---
+2025-05-28 20:25:23,492 - MainProcess - INFO - Dimensioni dataset (numero di entry JSONL): Totale=1847, Train=1477, Validation=184, Test=186
+2025-05-28 20:25:23,506 - MainProcess - INFO - Salvato train.jsonl con 1477 voci.
+2025-05-28 20:25:23,508 - MainProcess - INFO - Salvato validation.jsonl con 184 voci.
+2025-05-28 20:25:23,510 - MainProcess - INFO - Salvato test.jsonl con 186 voci.
+2025-05-28 20:25:23,510 - MainProcess - INFO - --- Script Terminato ---
+2025-05-28 20:26:15,398 - MainProcess - INFO - --- Dataset Creation Script --- Output Mode: chunked ---
+2025-05-28 20:26:15,398 - MainProcess - INFO - Collecting MIDI files to build tokenizer vocabulary...
+2025-05-28 20:26:16,106 - MainProcess - INFO - Creating new MIDI tokenizer configuration...
+2025-05-28 20:26:16,110 - MainProcess - INFO - New tokenizer created, trained (if applicable), and saved to mutopia_data\midi_vocab.json
+2025-05-28 20:26:16,110 - MainProcess - INFO - MIDI Tokenizer ready. Vocab size: 562
+2025-05-28 20:26:16,110 - MainProcess - INFO - --- Fase 1: Elaborazione File MIDI da mutopia_data\midi_files ---
+2025-05-28 20:26:16,815 - MainProcess - INFO - Trovati 1862 file MIDI in mutopia_data\midi_files da elaborare.
+2025-05-28 20:26:16,816 - MainProcess - INFO - Utilizzo di 15 processi worker.
+2025-05-28 20:26:20,924 - SpawnProcess-1 - INFO - Worker 28236 initializing tokenizer.
+2025-05-28 20:26:20,949 - SpawnProcess-1 - INFO - Worker 28236 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,117 - SpawnProcess-4 - INFO - Worker 25000 initializing tokenizer.
+2025-05-28 20:26:21,122 - SpawnProcess-4 - INFO - Worker 25000 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,228 - SpawnProcess-3 - INFO - Worker 26040 initializing tokenizer.
+2025-05-28 20:26:21,234 - SpawnProcess-3 - INFO - Worker 26040 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,284 - SpawnProcess-5 - INFO - Worker 24244 initializing tokenizer.
+2025-05-28 20:26:21,297 - SpawnProcess-5 - INFO - Worker 24244 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,331 - SpawnProcess-2 - INFO - Worker 17616 initializing tokenizer.
+2025-05-28 20:26:21,338 - SpawnProcess-2 - INFO - Worker 17616 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,373 - SpawnProcess-6 - INFO - Worker 4288 initializing tokenizer.
+2025-05-28 20:26:21,388 - SpawnProcess-6 - INFO - Worker 4288 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,405 - SpawnProcess-8 - INFO - Worker 18368 initializing tokenizer.
+2025-05-28 20:26:21,415 - SpawnProcess-8 - INFO - Worker 18368 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,553 - SpawnProcess-7 - INFO - Worker 400 initializing tokenizer.
+2025-05-28 20:26:21,558 - SpawnProcess-7 - INFO - Worker 400 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,579 - SpawnProcess-9 - INFO - Worker 22896 initializing tokenizer.
+2025-05-28 20:26:21,583 - SpawnProcess-9 - INFO - Worker 22896 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,627 - SpawnProcess-10 - INFO - Worker 9256 initializing tokenizer.
+2025-05-28 20:26:21,641 - SpawnProcess-10 - INFO - Worker 9256 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,662 - SpawnProcess-12 - INFO - Worker 28712 initializing tokenizer.
+2025-05-28 20:26:21,677 - SpawnProcess-12 - INFO - Worker 28712 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,692 - SpawnProcess-14 - INFO - Worker 28496 initializing tokenizer.
+2025-05-28 20:26:21,693 - SpawnProcess-11 - INFO - Worker 30584 initializing tokenizer.
+2025-05-28 20:26:21,696 - SpawnProcess-15 - INFO - Worker 19000 initializing tokenizer.
+2025-05-28 20:26:21,698 - SpawnProcess-14 - INFO - Worker 28496 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,702 - SpawnProcess-11 - INFO - Worker 30584 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,705 - SpawnProcess-15 - INFO - Worker 19000 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:21,715 - SpawnProcess-13 - INFO - Worker 5000 initializing tokenizer.
+2025-05-28 20:26:21,725 - SpawnProcess-13 - INFO - Worker 5000 tokenizer initialized with vocab size: 562
+2025-05-28 20:26:37,785 - MainProcess - INFO - Conteggio finale voci valide (chunks/files): 14150
+2025-05-28 20:26:37,785 - MainProcess - INFO - Dettaglio fallimenti/skip:
+2025-05-28 20:26:37,785 - MainProcess - INFO -   'skipped_mido_missing_metadata': 1
+2025-05-28 20:26:37,786 - MainProcess - INFO -   'skipped_mido_too_few_notes': 12
+2025-05-28 20:26:37,786 - MainProcess - INFO -   'skipped_mido_too_short': 2
+2025-05-28 20:26:37,786 - MainProcess - INFO - Numero totale di entry JSONL prodotte: 14150
+2025-05-28 20:26:37,786 - MainProcess - INFO - --- Fase 2: Divisione del Dataset ---
+2025-05-28 20:26:37,792 - MainProcess - INFO - Dimensioni dataset (numero di entry JSONL): Totale=14150, Train=11320, Validation=1415, Test=1415
+2025-05-28 20:26:38,386 - MainProcess - INFO - Salvato train.jsonl con 11320 voci.
+2025-05-28 20:26:38,455 - MainProcess - INFO - Salvato validation.jsonl con 1415 voci.
+2025-05-28 20:26:38,526 - MainProcess - INFO - Salvato test.jsonl con 1415 voci.
+2025-05-28 20:26:38,526 - MainProcess - INFO - --- Script Terminato ---
