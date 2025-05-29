@@ -28,6 +28,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Percorsi base per i dataset
 DATA_DIR_MUTOPIA = Path("/content/SheetsMusicGenerator/mutopia_data")
 DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_of_MIDI") # Come specificato
+DATA_DIR_PIANO = Path("/content/SheetsMusicGenerator/adl_piano_midi") # Per piano solo, se necessario
 #DATA_DIR_MUTOPIA = Path("./mutopia_data")
 #DATA_DIR_MAGICMIDI = Path("./The_Magic_of_MIDI") # Come specificato
 
@@ -42,6 +43,9 @@ if "-magicmidi" in sys.argv:
 elif "-mutopia" in sys.argv:
     DATA_DIR = DATA_DIR_MUTOPIA # Esplicito, anche se è il default
     dataset_name_chosen = "mutopia"
+elif "-piano" in sys.argv:
+    DATA_DIR = DATA_DIR_PIANO
+    dataset_name_chosen = "adl_piano_midi"
 
 logging.info(f"Utilizzo del dataset: {dataset_name_chosen} ({DATA_DIR})")
 
