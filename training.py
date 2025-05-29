@@ -624,7 +624,8 @@ if __name__ == "__main__":
     all_train_metadata_for_vocab = [] # For building metadata vocab
     # midi_files_for_vocab_build is only needed if tokenizer vocab needs to be built/trained by training.py
     # If dataset_creator.py guarantees vocab creation, this can be optional.
-    midi_files_for_tokenizer_vocab_build = [] 
+    midi_files_for_tokenizer_vocab_build = []
+    force_rebuild_vocabs = False # Set to True to rebuild both vocabs if needed
 
     logging.info(f"Inizio lettura {train_jsonl_path} per costruire vocabolario metadati (e opzionalmente MIDI tokenizer)...")
     try:
@@ -687,8 +688,6 @@ if __name__ == "__main__":
         logging.error("ERRORE CRITICO: Nessun metadato per vocabolario metadati.")
         # This could happen if train.jsonl is empty or malformed.
         # sys.exit(1) # Allow to proceed if metadata vocab can be loaded
-
-    force_rebuild_vocabs = False # Set to True to rebuild both vocabs if needed
     
     # midi_tokenizer will load from VOCAB_PATH or build if files are provided and force_build=True
     midi_tokenizer = build_or_load_tokenizer(
