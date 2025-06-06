@@ -1,5 +1,2 @@
-# SheetMusicGenerator
-A deep learning model to generate original music sheets
-
-# TODO:
--> UI per interazione con modello salvato
+TOMERGE with MIDI_Generator. 
+This repository is only for training models with already prepared dataset
