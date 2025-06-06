@@ -18,6 +18,11 @@ import sys
 from functools import partial # IMPORTANTE: Aggiunto per DataLoader collate_fn
 from symusic import Score
 import re
+import numpy as np
+import argparse
+
+# --- USAGE: ---
+# python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS 
 
 # --- Configurazione del logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,49 +30,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Configurazione / Costanti ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Percorsi base per i dataset
-DATA_DIR_MUTOPIA = Path("/content/SheetsMusicGenerator/mutopia_data")
-DATA_DIR_MAGICMIDI = Path("/content/SheetsMusicGenerator/The_Magic_of_MIDI") # Come specificato
-DATA_DIR_PIANO = Path("/content/SheetsMusicGenerator/adl_piano_midi") # Per piano solo, se necessario
-#DATA_DIR_MUTOPIA = Path("./mutopia_data")
-#DATA_DIR_MAGICMIDI = Path("./The_Magic_of_MIDI") # Come specificato
-
-# Imposta DATA_DIR di default (mutopia)
-DATA_DIR = DATA_DIR_MUTOPIA
-dataset_name_chosen = "mutopia (default)"
-
-# Controlla gli argomenti da riga di comando
-if "-magicmidi" in sys.argv:
-    DATA_DIR = DATA_DIR_MAGICMIDI
-    dataset_name_chosen = "The_Magic_Of_MIDI"
-elif "-mutopia" in sys.argv:
-    DATA_DIR = DATA_DIR_MUTOPIA # Esplicito, anche se è il default
-    dataset_name_chosen = "mutopia"
-elif "-piano" in sys.argv:
-    DATA_DIR = DATA_DIR_PIANO
-    dataset_name_chosen = "adl_piano_midi"
-
-logging.info(f"Utilizzo del dataset: {dataset_name_chosen} ({DATA_DIR})")
-
-SPLITS_DIR = DATA_DIR / "dataset_splits" # Directory con train/validation/test.jsonl
-MIDI_BASE_DIR = DATA_DIR # Directory radice dove cercare i midi_relative_path
-
-# Definisci il percorso su Google Drive dove vuoi salvare i modelli
-# Assicurati che la cartella "IlMioProgettoModelli" (o come vuoi chiamarla)
-# esista nel tuo Google Drive, oppure MODEL_SAVE_DIR.mkdir la creerà.
-DRIVE_MOUNT_POINT = Path("/content/drive/MyDrive/")
-MODEL_SAVE_DIR = DRIVE_MOUNT_POINT / "SheetsMusicGenerator_Models" # Esempio: Salva in una cartella "SheetsMusicGenerator_Models" su Drive
-# --- FINE MODIFICA PER MODEL_SAVE_DIR ---
-
-# Crea directory se non esistono
-MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-
 # Configurazioni Tokenizer MIDI (scegliere una strategia)
 MIDI_TOKENIZER_STRATEGY = miditok.REMI # Esempio scelto
 MIDI_VOCAB_TARGET_SIZE = 50000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
-
-VOCAB_PATH = DATA_DIR / "midi_vocab.json" # Dove salvare/caricare il vocabolario MIDI
-METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json" # Vocabolario per i token metadati
 
 # Token Speciali MIDI (allineati con le convenzioni di miditok)
 MIDI_PAD_TOKEN_NAME = "PAD_None"
@@ -315,6 +280,18 @@ def tokenize_metadata(metadata_dict):
                 if clean_instrument_name: # Assicurati che non sia vuoto dopo la pulizia
                     tokens.append(f"Instrument={clean_instrument_name}")
                     instrument_tokens_added_from_midi_list = True
+                    
+    # 8. Uso del Sustain Pedal e del Pitch Bend
+    if 'sustain_pedal_used' in metadata_dict and metadata_dict['sustain_pedal_used']:
+        tokens.append("Sustain=Used")
+    else:
+        tokens.append("Sustain=NotUsed")
+
+    if 'pitch_bend_used' in metadata_dict and metadata_dict['pitch_bend_used']:
+        tokens.append("PitchBend=Used")
+    else:
+        tokens.append("PitchBend=NotUsed")
+        
     
     # Fallback a mutopiainstrument se midi_instruments non ha prodotto token
     # (o se vuoi che 'mutopiainstrument' aggiunga/sovrascriva - modifica la logica di conseguenza)
@@ -403,11 +380,12 @@ def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
 
 class MutopiaDataset(Dataset):
     def __init__(self, jsonl_path, midi_tokenizer, metadata_vocab_map,
-                 max_len_midi_padded, max_len_meta, filter_key=None,
+                 max_len_midi_padded, max_len_meta, splits_dir, filter_key=None,
                  # min_chunk_len_midi is no longer needed if chunks are pre-filtered
                  ):
         # midi_base_dir is no longer strictly needed if we don't load MIDI files here
         # self.midi_base_dir = Path(midi_base_dir) 
+        self.splits_dir = Path(splits_dir)
         self.midi_tokenizer = midi_tokenizer # Still needed for special token IDs
         self.metadata_vocab_map = metadata_vocab_map
         self.max_len_midi_padded = max_len_midi_padded # Max length AFTER SOS/EOS and padding
@@ -459,30 +437,18 @@ class MutopiaDataset(Dataset):
                         src_tensor = torch.tensor(src_seq_list, dtype=torch.long)
 
 
-                        # 2. Prepara la sequenza MIDI (tgt) da 'token_ids'
-                        # This field must be present in the JSONL if using pre-chunked data
-                        raw_midi_ids_from_json = entry.get('token_ids') 
-                        if raw_midi_ids_from_json is None:
+                        # 2. Recupera il PERCORSO del file dei token, non la lista
+                        token_ids_relative_path = entry.get('token_ids_path')
+                        if not token_ids_relative_path:
                             skipped_missing_token_ids +=1
                             # logging.warning(f"Entry {entry.get('id', 'N/A')} in {jsonl_path} manca 'token_ids'. Saltato.")
                             if processed_json_lines % 1000 == 0: # Log occasionally
                                 logging.warning(f"Entry {entry.get('id', 'N/A')} in {jsonl_path} (line ~{line_num+1}) manca 'token_ids'. Saltato.")
                             continue
                         
-                        # Optional: if MIN_CHUNK_LEN_MIDI_TOKENS was a soft limit or needs re-check
-                        # if len(raw_midi_ids_from_json) < self.min_chunk_len_midi: # If min_chunk_len_midi is passed and used
-                        #     skipped_token_ids_too_short_pre_sos_eos += 1
-                        #     continue
-
-                        # Add SOS/EOS and truncate if necessary to fit max_len_midi_padded
-                        # max_len_midi_padded includes space for SOS and EOS
-                        max_data_tokens = self.max_len_midi_padded - 2
-                        truncated_midi_ids = raw_midi_ids_from_json[:max_data_tokens]
-                        
-                        tgt_seq_list = [self.sos_midi_id] + truncated_midi_ids + [self.eos_midi_id]
-                        tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
-                        
-                        self.samples.append((src_tensor, tgt_tensor))
+                        # 3. Salva il tensore dei metadati e il PERCORSO nella lista dei campioni
+                        # Non carichiamo il file binario qui, lo faremo in __getitem__ per efficienza
+                        self.samples.append((src_tensor, token_ids_relative_path))
 
                     except json.JSONDecodeError:
                         logging.warning(f"Errore decodifica JSON linea {line_num+1} in {jsonl_path}")
@@ -509,8 +475,28 @@ class MutopiaDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx):
-        return self.samples[idx]
+    def __getitem__(self, idx):        
+        # 1. Recupera il tensore dei metadati e il percorso relativo del file dei token
+        src_tensor, token_ids_relative_path = self.samples[idx]
+
+        # 2. Costruisci il percorso assoluto e carica l'array di token dal file .npy
+        try:
+            # self.splits_dir è la cartella /dataset_splits/
+            full_token_path = self.splits_dir / token_ids_relative_path
+            raw_midi_ids_from_file = np.load(full_token_path)
+        except Exception as e:
+            logging.error(f"Errore nel caricare il file di token binario: {full_token_path}. Errore: {e}")
+            return None # Il collate_fn salterà questo campione
+
+        # 3. La logica per aggiungere SOS/EOS e creare il tensore finale rimane la stessa di prima
+        max_data_tokens = self.max_len_midi_padded - 2
+        truncated_midi_ids = raw_midi_ids_from_file[:max_data_tokens]
+        
+        tgt_seq_list = [self.sos_midi_id] + truncated_midi_ids.tolist() + [self.eos_midi_id]
+        tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
+
+        # 4. Restituisci la coppia di tensori, pronta per il collate_fn
+        return src_tensor, tgt_tensor
 
 def pad_collate_fn(batch, meta_pad_id, midi_pad_id):
     batch = [item for item in batch if item is not None]
@@ -661,6 +647,38 @@ def evaluate(model, criterion, dataloader):
 #------------------------
 
 if __name__ == "__main__":
+    # GEstione degli argomenti
+    parser = argparse.ArgumentParser(description="Addestra un modello Transformer per la generazione musicale.")
+    parser.add_argument(
+        "--data_dir",
+        type=Path,
+        required=True,
+        help="Percorso della cartella base del dataset, che contiene la sottocartella 'dataset_splits'."
+    )
+    parser.add_argument(
+        "--model_save_dir",
+        type=Path,
+        required=True,
+        help="Percorso della cartella dove salvare i checkpoint del modello."
+    )
+    args = parser.parse_args()
+
+    DATA_DIR = args.data_dir
+    MODEL_SAVE_DIR = args.model_save_dir
+
+    # I percorsi derivati ora usano le nuove variabili
+    SPLITS_DIR = DATA_DIR / "dataset_splits"
+    VOCAB_PATH = DATA_DIR / "midi_vocab.json"
+    METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json"
+    MIDI_BASE_DIR = DATA_DIR # Usato per trovare file MIDI di esempio per il vocabolario se necessario
+
+    # Assicurati che la cartella di salvataggio esista
+    MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    
+    logging.info(f"Utilizzo del dataset da: {DATA_DIR}")
+    logging.info(f"I modelli verranno salvati in: {MODEL_SAVE_DIR}")
+    
+    
     logging.info("--- Preparazione Tokenizer e Vocabolari ---")
     train_jsonl_path = SPLITS_DIR / "train.jsonl" # This JSONL is now expected to be pre-chunked
     all_train_metadata_for_vocab = [] # For building metadata vocab
@@ -752,12 +770,12 @@ if __name__ == "__main__":
 
     logging.info("--- Creazione Dataset e DataLoader (con dati pre-chunked) ---")
     try:
-        # Pass MAX_SEQ_LEN_MIDI as max_len_midi_padded.
-        # midi_base_dir is removed as it's not used by Dataset if data is pre-chunked.
         train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, 
-                                     MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
+                                     MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META,
+                                     splits_dir=SPLITS_DIR) # <-- AGGIUNGI QUESTO
         val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map,
-                                   MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META)
+                                   MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META,
+                                   splits_dir=SPLITS_DIR) # <-- AGGIUNGI QUESTO
     except Exception as e:
         logging.error(f"Errore creazione Dataset: {e}", exc_info=True)
         sys.exit(1)
