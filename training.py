@@ -793,24 +793,41 @@ if __name__ == "__main__":
          # Potrebbe essere accettabile non avere un val set, ma di solito non è voluto.
 
     collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
-    # Tenta di usare tutti i core della CPU per massimizzare la velocità di caricamento dati.
-    # ATTENZIONE: Questo aumenterà significativamente l'uso della RAM.
-    # Se riscontra problemi di memoria o instabilità, riduca questo valore (es. os.cpu_count() // 2).
-    try:
-        # Usiamo os.cpu_count() che restituisce il numero totale di core logici.
-        num_dataloader_workers = os.cpu_count() if os.name != 'nt' else 0
-    except NotImplementedError:
-        # Fallback nel caso in cui os.cpu_count() non sia supportato
-        num_dataloader_workers = 2 if os.name != 'nt' else 0
-        logging.warning("os.cpu_count() non è disponibile. Utilizzo di un valore di default sicuro (2).")
+    
+    # Imposta il numero di workers in base al sistema operativo.
+    if os.name == 'nt':  # Se il sistema operativo è Windows
+        # Su Windows, un numero più basso di worker è spesso più efficiente per limitare
+        # l'overhead del metodo 'spawn'. 4 è un buon compromesso per un sistema con molti core.
+        num_dataloader_workers = 4
+        logging.info(f"Sistema operativo Windows rilevato. Imposto un numero conservativo di workers: {num_dataloader_workers}")
+    else:
+        # Su Linux e macOS, possiamo usare tutti i core disponibili in modo più efficiente.
+        try:
+            num_dataloader_workers = os.cpu_count()
+            logging.info(f"Sistema operativo non-Windows rilevato. Utilizzo tutti i core disponibili: {num_dataloader_workers}")
+        except NotImplementedError:
+            num_dataloader_workers = 2
+            logging.warning("os.cpu_count() non disponibile. Imposto un valore di default: 2")
 
-    logging.info(f"Utilizzo di {num_dataloader_workers} worker per i DataLoaders (impostazione aggressiva).")
+    # Assicuriamoci che il valore non sia None o zero, se non esplicitamente voluto
+    if num_dataloader_workers is None:
+        num_dataloader_workers = 0
+
+    logging.info(f"Utilizzo di {num_dataloader_workers} worker per i DataLoaders.")
+
+    # La logica `bool(num_dataloader_workers > 0)` gestisce il caso in cui i workers siano 0.
+    # persistent_workers=True richiede num_workers > 0.
+    use_persistent_workers = bool(num_dataloader_workers > 0)
 
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
-                                collate_fn=collate_fn_with_padding_ids, num_workers=num_dataloader_workers, persistent_workers=bool(num_dataloader_workers > 0))
+                                collate_fn=collate_fn_with_padding_ids, 
+                                num_workers=num_dataloader_workers,
+                                persistent_workers=use_persistent_workers)
     if len(val_dataset) > 0:
         val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
-                                  collate_fn=collate_fn_with_padding_ids, num_workers=num_dataloader_workers, persistent_workers=bool(num_dataloader_workers > 0))
+                                collate_fn=collate_fn_with_padding_ids, 
+                                num_workers=num_dataloader_workers,
+                                persistent_workers=use_persistent_workers)
     else:
         val_dataloader = None # Handle case with no validation data
 
