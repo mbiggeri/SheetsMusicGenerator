@@ -4,7 +4,6 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
-import gc
 import miditok
 from pathlib import Path
 import json
@@ -62,7 +61,7 @@ MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 # Programmi MIDI considerati come "pianoforte"
 PIANO_PROGRAMS = list(range(0, 8))
 
-# --- NUOVI IPERPARAMETRI PER MODALITÀ DI PROCESSSAMENTO ---
+# --- NUOVI IPERPARAMETRI PER MODALITÀ DI PROCESSAMENTO ---
 # PROCESSING_MODE = "piano_only"
 PROCESSING_MODE = "multi_instrument_stream"
 
@@ -580,33 +579,39 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
 
     for batch_data in progress_bar:
         if batch_data[0] is None: continue
+        
         src, tgt, src_padding_mask, tgt_padding_mask = batch_data
         src, tgt = src.to(DEVICE), tgt.to(DEVICE)
         src_padding_mask, tgt_padding_mask = src_padding_mask.to(DEVICE), tgt_padding_mask.to(DEVICE)
 
+        # Prepara gli input e gli output per il modello
         tgt_input = tgt[:, :-1]
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
         tgt_out = tgt[:, 1:]
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True) # 'set_to_none=True' è leggermente più veloce
+
+        # Forward pass
         logits = model(src=src, tgt=tgt_input,
                        src_padding_mask=src_padding_mask,
                        tgt_padding_mask=tgt_input_padding_mask,
                        memory_key_padding_mask=src_padding_mask)
         
+        # Calcolo della loss
         loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+        
+        # Backward pass e step dell'ottimizzatore
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         
-        # Svuota la cache CUDA
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            
-        # Forzare la garbage collection di Python (per liberare anche RAM CPU)
-        gc.collect()
+        batch_loss = loss.item()
+        total_loss += batch_loss
 
-        total_loss += loss.item()
+        # Elimina esplicitamente i tensori che non servono più in questo ciclo.
+        # Questo segnala al gestore di memoria di PyTorch che può liberare lo spazio.
+        del src, tgt, src_padding_mask, tgt_padding_mask, tgt_input, tgt_out, logits, loss
+        
         processed_batches += 1
         progress_bar.set_postfix({'train_loss': f'{total_loss / processed_batches:.4f}'})
 
@@ -647,7 +652,7 @@ def evaluate(model, criterion, dataloader):
 #------------------------
 
 if __name__ == "__main__":
-    # GEstione degli argomenti
+    # Gestione degli argomenti
     parser = argparse.ArgumentParser(description="Addestra un modello Transformer per la generazione musicale.")
     parser.add_argument(
         "--data_dir",
