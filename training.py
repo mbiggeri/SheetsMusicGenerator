@@ -184,11 +184,49 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
     return tokenizer
 
 def tokenize_metadata(metadata_dict):
-    tokens = []
+    tokens = [] #
+    key_to_tokenize_str = None # Stringa che conterrà la tonalità da tokenizzare
 
-    # 1. Tonalità (Key) - Invariato
-    if 'key' in metadata_dict and metadata_dict['key']:
-        tokens.append(f"Key={metadata_dict['key'].replace(' ', '_')}")
+    # Logica per determinare la stringa della tonalità
+    # Se PROCESSING_MODE è "piano_only" e il campo 'transposed_to_key' è disponibile e valido
+    if PROCESSING_MODE == "piano_only" and \
+       'transposed_to_key' in metadata_dict and \
+       metadata_dict['transposed_to_key']: #
+
+        raw_transposed_info = metadata_dict['transposed_to_key'] #
+
+        # dataset_creator.py imposta questo campo a "C major / a minor"
+        # Creiamo un token specifico per rappresentare questo stato di trasposizione mirata.
+        if raw_transposed_info == "C major / a minor":
+            key_to_tokenize_str = "Target_Cmaj_Amin" 
+        else:
+            # Se il valore è diverso, sanitizzalo in modo generico
+            # (questo caso è meno probabile se dataset_creator.py è consistente)
+            temp_key = str(raw_transposed_info).replace(' ', '_').replace('/', '_').replace('#','sharp')
+            key_to_tokenize_str = re.sub(r'[^a-zA-Z0-9_]', '', temp_key) #
+            if not key_to_tokenize_str: # Se la sanitizzazione produce una stringa vuota
+                key_to_tokenize_str = "Unknown_Transposed_Key"
+
+    # Fallback se non siamo in "piano_only" mode o se 'transposed_to_key' non è stato usato/trovato
+    if not key_to_tokenize_str:
+        if 'key' in metadata_dict and metadata_dict['key']: # Logica originale se 'key' esiste
+            key_to_tokenize_str = metadata_dict['key'] #
+        elif 'music21_detected_key' in metadata_dict and metadata_dict['music21_detected_key']:
+            # Utilizza 'music21_detected_key' se 'key' non c'è (popolato da dataset_creator)
+            key_to_tokenize_str = metadata_dict['music21_detected_key']
+        elif 'mido_declared_key_signature' in metadata_dict and metadata_dict['mido_declared_key_signature']:
+            # Utilizza 'mido_declared_key_signature' come ulteriore fallback (popolato da dataset_creator)
+            key_to_tokenize_str = metadata_dict['mido_declared_key_signature']
+
+    if key_to_tokenize_str: #
+        # Sanitizzazione generale per qualsiasi stringa di tonalità scelta
+        # Rimuove spazi, sostituisce caratteri speciali per creare un token valido
+        clean_key_token = str(key_to_tokenize_str).replace(' ', '_').replace('#', 'sharp') #
+        # Mantieni solo caratteri alfanumerici e underscore
+        clean_key_token = re.sub(r'[^a-zA-Z0-9_]', '', clean_key_token) #
+
+        if clean_key_token: # Assicurati che non sia una stringa vuota dopo la pulizia
+            tokens.append(f"Key={clean_key_token}") #
 
     # 2. Metro (Time Signature) - Invariato
     if 'time_signature' in metadata_dict and metadata_dict['time_signature']:
@@ -732,10 +770,18 @@ if __name__ == "__main__":
          # Potrebbe essere accettabile non avere un val set, ma di solito non è voluto.
 
     collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
-    # Adjust num_workers based on your system.
-    # If experiencing issues with DataLoader (especially on Windows or with many workers), reduce num_workers, even to 0.
-    num_dataloader_workers = 2 if os.name != 'nt' else 0 # Fewer workers on Windows often helps
-    logging.info(f"Using {num_dataloader_workers} workers for DataLoaders.")
+    # Tenta di usare tutti i core della CPU per massimizzare la velocità di caricamento dati.
+    # ATTENZIONE: Questo aumenterà significativamente l'uso della RAM.
+    # Se riscontra problemi di memoria o instabilità, riduca questo valore (es. os.cpu_count() // 2).
+    try:
+        # Usiamo os.cpu_count() che restituisce il numero totale di core logici.
+        num_dataloader_workers = os.cpu_count() if os.name != 'nt' else 0
+    except NotImplementedError:
+        # Fallback nel caso in cui os.cpu_count() non sia supportato
+        num_dataloader_workers = 2 if os.name != 'nt' else 0
+        logging.warning("os.cpu_count() non è disponibile. Utilizzo di un valore di default sicuro (2).")
+
+    logging.info(f"Utilizzo di {num_dataloader_workers} worker per i DataLoaders (impostazione aggressiva).")
 
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
                                 collate_fn=collate_fn_with_padding_ids, num_workers=num_dataloader_workers, persistent_workers=bool(num_dataloader_workers > 0))
