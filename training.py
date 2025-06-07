@@ -4,6 +4,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
+from torch.cuda.amp import GradScaler, autocast
 import miditok
 from pathlib import Path
 import json
@@ -47,15 +48,16 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
 EPOCHS = 100
-BATCH_SIZE = 512 # Riduci se hai poca memoria GPU
+BATCH_SIZE = 8 # Riduci se hai poca memoria GPU
+ACCUMULATION_STEPS = 16  # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
 LEARNING_RATE = 0.0001
 EMB_SIZE = 128 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
 FFN_HID_DIM = 256 # Dimensione layer nascosto FeedForward
-NUM_ENCODER_LAYERS = 2
-NUM_DECODER_LAYERS = 2
+NUM_ENCODER_LAYERS = 4
+NUM_DECODER_LAYERS = 4
 DROPOUT = 0.1
-MAX_SEQ_LEN_MIDI = 512 # Lunghezza massima sequenza MIDI (suddivide in più chunks se più lunga)
+MAX_SEQ_LEN_MIDI = 2048 # Lunghezza massima sequenza MIDI
 MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
 # Programmi MIDI considerati come "pianoforte"
@@ -572,50 +574,76 @@ class Seq2SeqTransformer(nn.Module):
 #------------------------
 
 def train_epoch(model, optimizer, criterion, train_dataloader):
+    """
+    Esegue un'epoca di addestramento combinando Addestramento a Precisione Mista
+    e Accumulazione del Gradiente per gestire sequenze lunghe con VRAM limitata.
+    """
     model.train()
     total_loss = 0
     processed_batches = 0
-    progress_bar = tqdm(train_dataloader, desc="Training Epoch", leave=False)
 
-    for batch_data in progress_bar:
+    # 1. Inizializza lo Scaler per la precisione mista
+    # Sposta i calcoli su float16 dove possibile per risparmiare VRAM e accelerare.
+    scaler = GradScaler("cuda", enabled=True)  # Usa "cuda" per precisione mista su GPU
+
+    # 2. Imposta i passaggi di accumulazione
+    # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
+    # ACCUMULATION_STEPS = 8  # Spostato all'inizio per chiarezza
+
+    # 3. Azzera i gradienti una sola volta all'inizio del ciclo di accumulazione.
+    optimizer.zero_grad()
+
+    progress_bar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="Training Epoch", leave=False)
+
+    for i, batch_data in progress_bar:
         if batch_data[0] is None: continue
         
         src, tgt, src_padding_mask, tgt_padding_mask = batch_data
         src, tgt = src.to(DEVICE), tgt.to(DEVICE)
-        src_padding_mask, tgt_padding_mask = src_padding_mask.to(DEVICE), tgt_padding_mask.to(DEVICE)
+        src_padding_mask, tgt_padding_mask = src_padding_mask.to(DEVICE), tgt_padding_mask
 
-        # Prepara gli input e gli output per il modello
         tgt_input = tgt[:, :-1]
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
         tgt_out = tgt[:, 1:]
 
-        optimizer.zero_grad(set_to_none=True) # 'set_to_none=True' è leggermente più veloce
+        # 4. Usa 'autocast' per la forward pass a precisione mista
+        with autocast("cuda", enabled=True):
+            logits = model(src=src, tgt=tgt_input,
+                           src_padding_mask=src_padding_mask,
+                           tgt_padding_mask=tgt_input_padding_mask,
+                           memory_key_padding_mask=src_padding_mask)
+            
+            loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            
+            # 5. Normalizza la loss per il numero di passaggi di accumulazione
+            loss = loss / ACCUMULATION_STEPS
 
-        # Forward pass
-        logits = model(src=src, tgt=tgt_input,
-                       src_padding_mask=src_padding_mask,
-                       tgt_padding_mask=tgt_input_padding_mask,
-                       memory_key_padding_mask=src_padding_mask)
-        
-        # Calcolo della loss
-        loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
-        
-        # Backward pass e step dell'ottimizzatore
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-        
-        batch_loss = loss.item()
-        total_loss += batch_loss
+        # 6. Esegui la backward pass usando lo scaler
+        # Lo scaler adatta i gradienti per evitare problemi di underflow con float16.
+        scaler.scale(loss).backward()
 
-        # Elimina esplicitamente i tensori che non servono più in questo ciclo.
-        # Questo segnala al gestore di memoria di PyTorch che può liberare lo spazio.
-        del src, tgt, src_padding_mask, tgt_padding_mask, tgt_input, tgt_out, logits, loss
-        
+        # 7. Esegui l'aggiornamento dei pesi e azzera i gradienti solo ogni ACCUMULATION_STEPS
+        if (i + 1) % ACCUMULATION_STEPS == 0:
+            # Riporta i gradienti a float32 prima del clipping (opzionale ma consigliato)
+            scaler.unscale_(optimizer)
+            
+            # Applica il gradient clipping per evitare gradienti esplosivi
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            # Esegui l'aggiornamento dei pesi tramite lo scaler
+            scaler.step(optimizer)
+            
+            # Aggiorna lo scaler per la prossima iterazione
+            scaler.update()
+            
+            # Azzera i gradienti per il prossimo ciclo di accumulazione
+            optimizer.zero_grad()
+
+        # Aggiorna la loss totale (moltiplica per ACCUMULATION_STEPS per avere il valore corretto)
+        total_loss += loss.item() * ACCUMULATION_STEPS
         processed_batches += 1
         progress_bar.set_postfix({'train_loss': f'{total_loss / processed_batches:.4f}'})
 
-    if processed_batches == 0: return 0.0
     return total_loss / processed_batches
 
 def evaluate(model, criterion, dataloader):
