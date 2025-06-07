@@ -600,7 +600,8 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         
         src, tgt, src_padding_mask, tgt_padding_mask = batch_data
         src, tgt = src.to(DEVICE), tgt.to(DEVICE)
-        src_padding_mask, tgt_padding_mask = src_padding_mask.to(DEVICE), tgt_padding_mask
+        src_padding_mask = src_padding_mask.to(DEVICE)
+        tgt_padding_mask = tgt_padding_mask.to(DEVICE)
 
         tgt_input = tgt[:, :-1]
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
@@ -657,7 +658,8 @@ def evaluate(model, criterion, dataloader):
             if batch_data[0] is None: continue
             src, tgt, src_padding_mask, tgt_padding_mask = batch_data
             src, tgt = src.to(DEVICE), tgt.to(DEVICE)
-            src_padding_mask, tgt_padding_mask = src_padding_mask.to(DEVICE), tgt_padding_mask.to(DEVICE)
+            src_padding_mask = src_padding_mask.to(DEVICE)
+            tgt_padding_mask = tgt_padding_mask.to(DEVICE)
 
             tgt_input = tgt[:, :-1]
             tgt_input_padding_mask = tgt_padding_mask[:, :-1]
