@@ -584,7 +584,7 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
 
     # 1. Inizializza lo Scaler per la precisione mista
     # Sposta i calcoli su float16 dove possibile per risparmiare VRAM e accelerare.
-    scaler = GradScaler("cuda", enabled=True)  # Usa "cuda" per precisione mista su GPU
+    scaler = torch.amp.GradScaler("cuda", enabled=True)  # Usa "cuda" per precisione mista su GPU
 
     # 2. Imposta i passaggi di accumulazione
     # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
@@ -607,7 +607,7 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         tgt_out = tgt[:, 1:]
 
         # 4. Usa 'autocast' per la forward pass a precisione mista
-        with autocast("cuda", enabled=True):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16, enabled=True):
             logits = model(src=src, tgt=tgt_input,
                            src_padding_mask=src_padding_mask,
                            tgt_padding_mask=tgt_input_padding_mask,
