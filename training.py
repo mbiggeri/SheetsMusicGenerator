@@ -48,12 +48,12 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 
 # Iperparametri del Modello e Addestramento (Esempi!)
 EPOCHS = 100
-BATCH_SIZE = 8 # Riduci se hai poca memoria GPU
-ACCUMULATION_STEPS = 16  # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
+BATCH_SIZE = 128 # Riduci se hai poca memoria GPU
+ACCUMULATION_STEPS = 2  # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
 LEARNING_RATE = 0.0001
-EMB_SIZE = 128 # Dimensione embedding
+EMB_SIZE = 256 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
-FFN_HID_DIM = 256 # Dimensione layer nascosto FeedForward
+FFN_HID_DIM = 1024 # Dimensione layer nascosto FeedForward
 NUM_ENCODER_LAYERS = 4
 NUM_DECODER_LAYERS = 4
 DROPOUT = 0.1
@@ -64,8 +64,8 @@ MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 PIANO_PROGRAMS = list(range(0, 8))
 
 # --- NUOVI IPERPARAMETRI PER MODALITÀ DI PROCESSAMENTO ---
-# PROCESSING_MODE = "piano_only"
-PROCESSING_MODE = "multi_instrument_stream"
+PROCESSING_MODE = "piano_only"
+# PROCESSING_MODE = "multi_instrument_stream"
 
 # Setup Logging (opzionale ma utile)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -522,11 +522,11 @@ class PositionalEncoding(nn.Module):
         pe = torch.zeros(max_len, d_model)
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x + self.pe[:x.size(0), :]
+        x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
 class Seq2SeqTransformer(nn.Module):
