@@ -12,7 +12,7 @@ import logging
 # --- EXAMPLE: python analyze_profiles.py --input_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset\dataset_splits --output_file C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset\dataset_splits --min_support 150 --max_profiles 100
 
 # --- CONFIGURAZIONE ---
-PROCESSING_MODE = "piano_only" # or "multi_instrument_stream"
+PROCESSING_MODE = "piano_only" # or "multi_instrument_stream" # or "genres" 
 
 # --- FUNZIONE DI TOKENIZZAZIONE (adattata da dataset_creator.py) ---
 def tokenize_metadata(metadata_dict):

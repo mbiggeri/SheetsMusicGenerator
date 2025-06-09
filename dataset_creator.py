@@ -70,7 +70,7 @@ import miditok
 from symusic import Score # For loading MIDI for miditok
 from symusic import Note as SymusicNote # Import Note for type hinting and manipulation
 
-ESSENTIAL_METADATA = ['time_signature', 'bpm_rounded', 'avg_velocity_rounded', 'velocity_range_rounded', 'mido_declared_key_signature']
+ESSENTIAL_METADATA = [] # ['time_signature', 'bpm_rounded', 'avg_velocity_rounded', 'velocity_range_rounded', 'mido_declared_key_signature'] Commented in genres mode
 MIN_MIDO_DURATION_SECONDS = 30
 MIN_NOTE_ON_MESSAGES = 100
 TRAIN_SPLIT = 0.85
@@ -369,6 +369,23 @@ def process_single_file(args_tuple):
                  'instruments_found': len(mido_check_result.get('midi_instruments', []))}]
 
     final_metadata = {}
+    
+    # === NUOVA LOGICA PER ESTRARRE IL GENERE DAL PERCORSO ===
+    if config.PROCESSING_MODE == "genres":
+        try:
+            # Calcola il percorso relativo dalla cartella 'MIDI' principale
+            relative_path_for_genre = midi_file_path.relative_to(midi_input_dir)
+            # Il genere è la prima parte del percorso relativo. Ignora il resto.
+            if relative_path_for_genre.parts:
+                genre = relative_path_for_genre.parts[0]
+                final_metadata['genre'] = genre
+                logging.debug(f"Extracted genre '{genre}' for file {midi_file_path.name}")
+        except (ValueError, IndexError):
+            # Questo errore può verificarsi se un file si trova direttamente nella root di MIDI_INPUT_DIR
+            logging.warning(f"Could not extract genre from path for {midi_file_path.name}. Is it in a genre subfolder?")
+            final_metadata['genre'] = None # O un valore di default come 'unknown'
+    # ========================================================
+
     final_metadata['mido_declared_key_signature'] = mido_check_result.get('key_signature_declared') 
     final_metadata['time_signature'] = mido_check_result.get('time_signature')
     final_metadata['title'] = midi_file_path.stem

@@ -9,8 +9,8 @@ from pathlib import Path
 # =============================================================================
 
 # Modalità di processamento principale (usata per la logica di trasposizione e filtraggio)
-# Valori possibili: "piano_only", "multi_instrument_stream"
-PROCESSING_MODE = "piano_only"
+# Valori possibili: "piano_only", "multi_instrument_stream", "genres"
+PROCESSING_MODE = "genres"
 
 # Programmi MIDI considerati "pianoforte" (usato in modalità "piano_only")
 # General MIDI programs 0-7: Acoustic Grand, Bright Acoustic, Electric Grand, Honky-tonk,

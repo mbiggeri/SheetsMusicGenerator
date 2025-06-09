@@ -1,7 +1,8 @@
 import re
 
 # Inserisci qui tutte le costanti condivise, se vuoi
-PROCESSING_MODE = "piano_only"
+# Questa variabile deve corrispondere a quella in config.py per attivare la logica corretta.
+PROCESSING_MODE = "genres" 
 META_PAD_TOKEN_NAME = "<pad_meta>"
 META_UNK_TOKEN_NAME = "<unk_meta>"
 META_SOS_TOKEN_NAME = "<sos_meta>"
@@ -13,6 +14,21 @@ def tokenize_metadata(metadata_dict):
     Usata sia da dataset_creator.py che da training.py.
     """
     tokens = []
+
+    # Se la modalità è "genres", estraiamo SOLO il genere e ci fermiamo.
+    if PROCESSING_MODE == "genres":
+        if 'genre' in metadata_dict and metadata_dict['genre']:
+            # Pulisce il nome del genere per renderlo un token valido
+            # Esempio: "Classic Rock" -> "Genre=Classic_Rock"
+            genre_name = str(metadata_dict['genre']).strip().replace(' ', '_')
+            clean_genre = re.sub(r'[^a-zA-Z0-9_]', '', genre_name) # Rimuove caratteri non validi
+            if clean_genre:
+                tokens.append(f"Genre={clean_genre}")
+        
+        # Restituisce solo il token del genere (o una lista vuota se non trovato)
+        return tokens
+    # =================================================
+    
     key_to_tokenize_str = None
 
     # Logica robusta per la tonalità
