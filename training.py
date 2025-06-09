@@ -20,6 +20,7 @@ from symusic import Score
 import re
 import numpy as np
 import argparse
+from tokenize_metadata import tokenize_metadata
 
 # --- USAGE: ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS 
@@ -62,10 +63,6 @@ MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
 # Programmi MIDI considerati come "pianoforte"
 PIANO_PROGRAMS = list(range(0, 8))
-
-# --- NUOVI IPERPARAMETRI PER MODALITÀ DI PROCESSAMENTO ---
-PROCESSING_MODE = "piano_only"
-# PROCESSING_MODE = "multi_instrument_stream"
 
 # Setup Logging (opzionale ma utile)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -149,231 +146,28 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
          sys.exit(1)
     return tokenizer
 
-def tokenize_metadata(metadata_dict):
-    tokens = [] #
-    key_to_tokenize_str = None # Stringa che conterrà la tonalità da tokenizzare
 
-    # Logica per determinare la stringa della tonalità
-    # Se PROCESSING_MODE è "piano_only" e il campo 'transposed_to_key' è disponibile e valido
-    if PROCESSING_MODE == "piano_only" and \
-       'transposed_to_key' in metadata_dict and \
-       metadata_dict['transposed_to_key']: #
-
-        raw_transposed_info = metadata_dict['transposed_to_key'] #
-
-        # dataset_creator.py imposta questo campo a "C major / a minor"
-        # Creiamo un token specifico per rappresentare questo stato di trasposizione mirata.
-        if raw_transposed_info == "C major / a minor":
-            key_to_tokenize_str = "Target_Cmaj_Amin" 
-        else:
-            # Se il valore è diverso, sanitizzalo in modo generico
-            # (questo caso è meno probabile se dataset_creator.py è consistente)
-            temp_key = str(raw_transposed_info).replace(' ', '_').replace('/', '_').replace('#','sharp')
-            key_to_tokenize_str = re.sub(r'[^a-zA-Z0-9_]', '', temp_key) #
-            if not key_to_tokenize_str: # Se la sanitizzazione produce una stringa vuota
-                key_to_tokenize_str = "Unknown_Transposed_Key"
-
-    # Fallback se non siamo in "piano_only" mode o se 'transposed_to_key' non è stato usato/trovato
-    if not key_to_tokenize_str:
-        if 'key' in metadata_dict and metadata_dict['key']: # Logica originale se 'key' esiste
-            key_to_tokenize_str = metadata_dict['key'] #
-        elif 'music21_detected_key' in metadata_dict and metadata_dict['music21_detected_key']:
-            # Utilizza 'music21_detected_key' se 'key' non c'è (popolato da dataset_creator)
-            key_to_tokenize_str = metadata_dict['music21_detected_key']
-        elif 'mido_declared_key_signature' in metadata_dict and metadata_dict['mido_declared_key_signature']:
-            # Utilizza 'mido_declared_key_signature' come ulteriore fallback (popolato da dataset_creator)
-            key_to_tokenize_str = metadata_dict['mido_declared_key_signature']
-
-    if key_to_tokenize_str: #
-        # Sanitizzazione generale per qualsiasi stringa di tonalità scelta
-        # Rimuove spazi, sostituisce caratteri speciali per creare un token valido
-        clean_key_token = str(key_to_tokenize_str).replace(' ', '_').replace('#', 'sharp') #
-        # Mantieni solo caratteri alfanumerici e underscore
-        clean_key_token = re.sub(r'[^a-zA-Z0-9_]', '', clean_key_token) #
-
-        if clean_key_token: # Assicurati che non sia una stringa vuota dopo la pulizia
-            tokens.append(f"Key={clean_key_token}") #
-
-    # 2. Metro (Time Signature) - Invariato
-    if 'time_signature' in metadata_dict and metadata_dict['time_signature']:
-        tokens.append(f"TimeSig={metadata_dict['time_signature']}")
-
-    # 3. BPM (Battiti Per Minuto) - Nuovo, categorizzato
-    if 'bpm_rounded' in metadata_dict and metadata_dict['bpm_rounded'] is not None:
-        bpm = metadata_dict['bpm_rounded']
-        if bpm <= 0: # Improbabile ma gestiamo
-            token_bpm = "Tempo_Unknown"
-        elif bpm <= 60:
-            token_bpm = "Tempo_VerySlow"  # (es. Largo, Grave)
-        elif bpm <= 76: # Fino a Adagio
-            token_bpm = "Tempo_Slow"
-        elif bpm <= 108: # Fino a Andante/Moderato
-            token_bpm = "Tempo_Moderate"
-        elif bpm <= 132: # Fino a Allegro
-            token_bpm = "Tempo_Fast"
-        elif bpm <= 168: # Fino a Vivace/Presto
-            token_bpm = "Tempo_VeryFast"
-        else: # Prestissimo
-            token_bpm = "Tempo_ExtremelyFast"
-        tokens.append(token_bpm)
-
-    # 4. Velocity Media - Nuovo, categorizzato
-    if 'avg_velocity_rounded' in metadata_dict and metadata_dict['avg_velocity_rounded'] is not None:
-        avg_vel = metadata_dict['avg_velocity_rounded']
-        if avg_vel < 0 : token_avg_vel = "AvgVel_Unknown" # Improbabile
-        elif avg_vel <= 35: # Pianissimo (pp) / Piano (p)
-            token_avg_vel = "AvgVel_VeryLow"
-        elif avg_vel <= 60: # MezzoPiano (mp)
-            token_avg_vel = "AvgVel_Low"
-        elif avg_vel <= 85: # MezzoForte (mf)
-            token_avg_vel = "AvgVel_Medium"
-        elif avg_vel <= 110: # Forte (f)
-            token_avg_vel = "AvgVel_High"
-        else: # Fortissimo (ff)
-            token_avg_vel = "AvgVel_VeryHigh"
-        tokens.append(token_avg_vel)
-
-    # 5. Range di Velocity - Nuovo, categorizzato
-    if 'velocity_range_rounded' in metadata_dict and metadata_dict['velocity_range_rounded'] is not None:
-        vel_range = metadata_dict['velocity_range_rounded']
-        if vel_range < 0: token_vel_range = "VelRange_Unknown" # Improbabile
-        elif vel_range <= 15: # Poca variazione dinamica
-            token_vel_range = "VelRange_Narrow"
-        elif vel_range <= 40:
-            token_vel_range = "VelRange_Medium"
-        elif vel_range <= 70:
-            token_vel_range = "VelRange_Wide"
-        else: # Variazione dinamica molto ampia
-            token_vel_range = "VelRange_VeryWide"
-        tokens.append(token_vel_range)
-
-    # 6. Numero di Strumenti (Opzionale, ma può essere utile per lo "stile")
-    num_instruments = 0
-    if 'midi_instruments' in metadata_dict and isinstance(metadata_dict['midi_instruments'], list):
-        num_instruments = len(metadata_dict['midi_instruments'])
+def load_metadata_vocab(vocab_path):
+    """Carica un vocabolario di metadati esistente e verifica i token speciali."""
+    if not vocab_path.exists():
+        logging.error(f"ERRORE CRITICO: File vocabolario metadati non trovato in {vocab_path}. Esegui prima dataset_creator.py.")
+        sys.exit(1)
     
-    if num_instruments == 0:
-        token_num_inst = "NumInst_None" # O potresti ometterlo
-    elif num_instruments == 1:
-        token_num_inst = "NumInst_Solo"
-    elif num_instruments == 2:
-        token_num_inst = "NumInst_Duet"
-    elif num_instruments <= 4: # Trio, Quartetto
-        token_num_inst = "NumInst_SmallChamber"
-    elif num_instruments <= 8: # Ensemble piccolo/medio
-        token_num_inst = "NumInst_MediumEnsemble"
-    else: # Ensemble grande
-        token_num_inst = "NumInst_LargeEnsemble"
-    tokens.append(token_num_inst)
-
-
-    # 7. Nomi degli Strumenti (Logica precedente, adattata per chiarezza)
-    instrument_tokens_added_from_midi_list = False
-    if 'midi_instruments' in metadata_dict and isinstance(metadata_dict['midi_instruments'], list) and metadata_dict['midi_instruments']:
-        # Priorità alla lista di strumenti direttamente dal MIDI se presente e valida e non vuota
-        for instrument_name in metadata_dict['midi_instruments']:
-            if instrument_name and isinstance(instrument_name, str): # Verifica aggiuntiva
-                # Pulisci il nome dello strumento per creare un token valido
-                # Rimuovi caratteri speciali, spazi, normalizza case se necessario.
-                # Qui usiamo una pulizia semplice.
-                clean_instrument_name = instrument_name.replace(' ', '_').replace('(', '').replace(')', '').replace('#','sharp')
-                clean_instrument_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_instrument_name) # Mantieni solo alfanumerici e underscore
-                if clean_instrument_name: # Assicurati che non sia vuoto dopo la pulizia
-                    tokens.append(f"Instrument={clean_instrument_name}")
-                    instrument_tokens_added_from_midi_list = True
-                    
-    # 8. Uso del Sustain Pedal e del Pitch Bend
-    if 'sustain_pedal_used' in metadata_dict and metadata_dict['sustain_pedal_used']:
-        tokens.append("Sustain=Used")
-    else:
-        tokens.append("Sustain=NotUsed")
-
-    if 'pitch_bend_used' in metadata_dict and metadata_dict['pitch_bend_used']:
-        tokens.append("PitchBend=Used")
-    else:
-        tokens.append("PitchBend=NotUsed")
+    logging.info(f"Caricamento vocabolario Metadati da {vocab_path}")
+    with open(vocab_path, 'r', encoding='utf-8') as f:
+        vocab_data = json.load(f)
+    
+    token_to_id = vocab_data['token_to_id']
+    
+    # Verifica che i token speciali necessari esistano
+    required_specials = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]
+    missing = [t for t in required_specials if t not in token_to_id]
+    if missing:
+        logging.error(f"ERRORE CRITICO: Token speciali metadati mancanti nel file caricato: {missing}.")
+        sys.exit(1)
         
-    
-    # Fallback a mutopiainstrument se midi_instruments non ha prodotto token
-    # (o se vuoi che 'mutopiainstrument' aggiunga/sovrascriva - modifica la logica di conseguenza)
-    if not instrument_tokens_added_from_midi_list and 'mutopiainstrument' in metadata_dict and metadata_dict['mutopiainstrument']:
-        instrument_string = metadata_dict['mutopiainstrument']
-        # Sostituisci " and " e altri separatori comuni
-        instrument_string_normalized = re.sub(r'\s+(?:and|,|&)\s+', ',', instrument_string, flags=re.IGNORECASE)
-        instrument_string_normalized = re.sub(r'[()]', '', instrument_string_normalized) # Rimuovi parentesi
-
-        instrument_names_from_ly = [name.strip() for name in instrument_string_normalized.split(',') if name.strip()]
-        
-        for instrument_name in instrument_names_from_ly:
-            if instrument_name:
-                clean_instrument_name = instrument_name.replace(' ', '_').replace('#','sharp')
-                clean_instrument_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_instrument_name)
-                if clean_instrument_name:
-                    tokens.append(f"Instrument={clean_instrument_name}")
-    
-    return tokens
-
-def build_or_load_metadata_vocab(all_metadata_examples, force_build=False):
-    if METADATA_VOCAB_PATH.exists() and not force_build:
-        logging.info(f"Caricamento vocabolario Metadati da {METADATA_VOCAB_PATH}")
-        with open(METADATA_VOCAB_PATH, 'r', encoding='utf-8') as f:
-            vocab_data = json.load(f)
-        token_to_id = vocab_data['token_to_id']
-        required_specials = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]
-        missing = [t for t in required_specials if t not in token_to_id]
-        if missing:
-             logging.warning(f"Token speciali metadati mancanti nel file caricato: {missing}. Ricostruisco.")
-             return build_or_load_metadata_vocab(all_metadata_examples, force_build=True)
-        id_to_token = {i: t for t, i in token_to_id.items()}
-        return token_to_id, id_to_token
-    else:
-        logging.info("Creazione nuovo vocabolario Metadati...")
-        metadata_tokens = set()
-        for meta_dict in all_metadata_examples:
-            tokens = tokenize_metadata(meta_dict)
-            metadata_tokens.update(tokens)
-
-        all_tokens_list = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME] + sorted(list(metadata_tokens))
-        token_to_id = {token: i for i, token in enumerate(all_tokens_list)}
-        id_to_token = {i: token for token, i in token_to_id.items()}
-
-        if token_to_id[META_PAD_TOKEN_NAME] != 0:
-            logging.warning(f"ID del META_PAD_TOKEN_NAME ({META_PAD_TOKEN_NAME}) non è 0. Riassegno gli ID per coerenza con ignore_index.")
-            # Riassegna per avere PAD = 0
-            pad_tok = META_PAD_TOKEN_NAME
-            other_specials = [t for t in [META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME] if t in token_to_id] # quelli già presenti
-            unique_metadata_tokens_sorted = sorted(list(metadata_tokens))
-            
-            all_tokens_reordered = [pad_tok] + \
-                                   [s for s in other_specials if s != pad_tok] + \
-                                   [mt for mt in unique_metadata_tokens_sorted if mt not in [pad_tok] + other_specials]
-            # Assicura che tutti i token originali siano presenti, specialmente se un token metadato avesse lo stesso nome di uno speciale
-            final_token_set = set(all_tokens_reordered)
-            for special_tok_defined in [META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]:
-                if special_tok_defined not in final_token_set:
-                    all_tokens_reordered.append(special_tok_defined)
-            
-            # Rimuovi duplicati mantenendo l'ordine (prima occorrenza)
-            seen = set()
-            all_tokens_final_unique_ordered = []
-            for item in all_tokens_reordered:
-                if item not in seen:
-                    seen.add(item)
-                    all_tokens_final_unique_ordered.append(item)
-
-            token_to_id = {token: i for i, token in enumerate(all_tokens_final_unique_ordered)}
-            id_to_token = {i: token for token, i in token_to_id.items()}
-            logging.info(f"Nuovo ID META_PAD_TOKEN_NAME: {token_to_id.get(META_PAD_TOKEN_NAME, 'NON TROVATO DOPO RIORDINO')}")
-
-
-        vocab_data = {'token_to_id': token_to_id, 'id_to_token': id_to_token}
-        logging.info(f"Salvataggio vocabolario Metadati in {METADATA_VOCAB_PATH}")
-        METADATA_VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(METADATA_VOCAB_PATH, 'w', encoding='utf-8') as f:
-            json.dump(vocab_data, f, ensure_ascii=False, indent=2)
-
-        logging.info(f"Dimensione vocabolario Metadati (incl. speciali): {len(token_to_id)}")
-        return token_to_id, id_to_token
+    logging.info(f"Vocabolario metadati caricato. Dimensione: {len(token_to_id)}")
+    return token_to_id
 
 #------------------------
 # Dataset e DataLoader
@@ -789,7 +583,7 @@ if __name__ == "__main__":
         midi_file_paths=midi_files_for_tokenizer_vocab_build if not VOCAB_PATH.exists() or force_rebuild_vocabs else None, 
         force_build=force_rebuild_vocabs
     )
-    metadata_vocab_map, _ = build_or_load_metadata_vocab(all_train_metadata_for_vocab, force_build=force_rebuild_vocabs)
+    metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
 
     MIDI_VOCAB_SIZE = len(midi_tokenizer)
     META_VOCAB_SIZE = len(metadata_vocab_map)
