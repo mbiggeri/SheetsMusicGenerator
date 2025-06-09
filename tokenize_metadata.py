@@ -17,16 +17,17 @@ def tokenize_metadata(metadata_dict):
 
     # Logica robusta per la tonalità
     if PROCESSING_MODE == "piano_only" and 'transposed_to_key' in metadata_dict and metadata_dict['transposed_to_key']:
-        raw_transposed_info = metadata_dict['transposed_to_key']
-        # Usiamo 'in' per ignorare differenze come 'a minor' vs 'A minor'
-        if "c major / a minor" in raw_transposed_info.lower():
+        raw_transposed_info = metadata_dict['transposed_to_key'].lower()
+        # Controlla se le sottostringhe chiave sono presenti, ignorando il formato esatto.
+        if "c major" in raw_transposed_info and "a minor" in raw_transposed_info:
             key_to_tokenize_str = "Target_Cmaj_Amin"
         else:
+            # Fallback per chiavi trasposte che non sono la destinazione standard
             temp_key = str(raw_transposed_info).replace(' ', '_').replace('/', '_').replace('#','sharp')
             key_to_tokenize_str = re.sub(r'[^a-zA-Z0-9_]', '', temp_key)
             if not key_to_tokenize_str:
                 key_to_tokenize_str = "Unknown_Transposed_Key"
-    
+                   
     if not key_to_tokenize_str:
         key_source = metadata_dict.get('key') or \
                      metadata_dict.get('music21_detected_key') or \
@@ -128,16 +129,12 @@ def tokenize_metadata(metadata_dict):
                     tokens.append(f"Instrument={clean_instrument_name}")
                     instrument_tokens_added_from_midi_list = True
                     
-    # 8. Uso del Sustain Pedal e del Pitch Bend
-    if 'sustain_pedal_used' in metadata_dict and metadata_dict['sustain_pedal_used']:
+    # 8. Uso del Sustain Pedal e del Pitch Bend (aggiunge il token solo se usati)
+    if metadata_dict.get('sustain_pedal_used', False):
         tokens.append("Sustain=Used")
-    else:
-        tokens.append("Sustain=NotUsed")
 
-    if 'pitch_bend_used' in metadata_dict and metadata_dict['pitch_bend_used']:
+    if metadata_dict.get('pitch_bend_used', False):
         tokens.append("PitchBend=Used")
-    else:
-        tokens.append("PitchBend=NotUsed")
         
     
     # Fallback a mutopiainstrument se midi_instruments non ha prodotto token

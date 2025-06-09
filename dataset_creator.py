@@ -63,7 +63,7 @@ warnings.filterwarnings('ignore', module='music21')
 # --- USAGE ---
 # python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked --force_tokenizer_build --transpose_piano_only --fast
 # --delete_skipped_files (delete all files not included in the final dataset)  --dry_run_delete (simulate the deletion without actually deleting files)
-# EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset --output_mode chunked --force_tokenizer_build --fast
+# EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset --output_mode chunked --force_tokenizer_build --fast --transpose_piano_only --delete_skipped_files
 
 # --- Additions for Tokenization and Chunking ---
 import miditok
@@ -310,43 +310,33 @@ def transpose_score(score, semitones: int):
             note.pitch = max(0, min(127, note.pitch + semitones)) # Ensure pitch stays within MIDI range
     return score
 
-def get_transposition_semitones(declared_key: str, target_major: str, target_minor: str) -> int:
+def get_transposition_semitones(declared_key: str, target_major: str, target_minor: str) -> int | None:
     """
     Calculates the semitone offset to transpose from declared_key to target_major/minor.
     Assumes declared_key is a string like 'C', 'Am', 'Db', 'F#m'.
-    Returns 0 if declared_key is not recognized or already matches target.
+    Returns None if declared_key is not recognized, otherwise returns the semitone offset (which can be 0).
     """
-    declared_key_normalized = declared_key.replace(' ', '').replace('m', 'm').strip() # Normalize 'C major' to 'C'
+    if not declared_key:
+        return None
+
+    declared_key_normalized = declared_key.replace(' ', '').replace('m', 'm').strip()
     
-    # Try exact match first
     semitones_from_C = KEY_SEMITONE_MAP.get(declared_key_normalized)
 
     if semitones_from_C is None:
-        # Attempt to infer major/minor if not explicitly stated, or handle common variations
         if declared_key_normalized.endswith('major'):
             semitones_from_C = KEY_SEMITONE_MAP.get(declared_key_normalized[:-5])
         elif declared_key_normalized.endswith('minor'):
             semitones_from_C = KEY_SEMITONE_MAP.get(declared_key_normalized[:-5] + 'm')
-        else: # Maybe it's just 'C' or 'Am' without 'major'/'minor'
+        else:
             semitones_from_C = KEY_SEMITONE_MAP.get(declared_key_normalized)
-
 
     if semitones_from_C is None:
         logging.warning(f"Declared key '{declared_key}' not recognized for transposition. Skipping transposition for this file.")
-        return 0 # Cannot determine transposition
+        return None
 
-    # Calculate offset to bring it to C/Am
-    # The reference key (e.g., C major / A minor) is considered 0 semitones away from C.
-    # So if the declared key is G (7 semitones from C), we need to shift by -7 semitones to get to C.
-    # If the declared key is Bb (10 semitones from C), we need to shift by -10 semitones to get to C.
     transposition_amount = -semitones_from_C
     
-    # MIDI pitches are 0-127. -12 semitones is one octave down.
-    # We want to ensure the notes stay within a reasonable range and not go too low or too high
-    # A full octave transposition might be needed to avoid extreme shifts.
-    # For simplicity, we just apply the direct semitone difference.
-    # A more advanced approach might involve shifting by octaves to keep it centered.
-
     return transposition_amount
 
 
@@ -497,9 +487,16 @@ def process_single_file(args_tuple):
                 if transposition_enabled and config.PROCESSING_MODE == "piano_only":
                     declared_key = mido_check_result.get('key_signature_declared')
                     if declared_key:
+                        # La funzione ora restituisce None in caso di fallimento
                         transposition_semitones = get_transposition_semitones(declared_key, config.REFERENCE_KEY_MAJOR, config.REFERENCE_KEY_MINOR)
-                        if transposition_semitones != 0:
-                            score = transpose_score(score, transposition_semitones)
+                        
+                        # Controlla se la tonalità è stata identificata con successo
+                        if transposition_semitones is not None:
+                            # Esegui la trasposizione solo se necessario
+                            if transposition_semitones != 0:
+                                score = transpose_score(score, transposition_semitones)
+                            
+                            # IMPOSTA SEMPRE I METADATI se la tonalità è stata riconosciuta, anche se l'offset è 0
                             final_metadata['transposed_to_key'] = f"{config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor"
                             final_metadata['original_key_mido'] = declared_key
                             final_metadata['transposition_semitones'] = transposition_semitones
@@ -530,20 +527,20 @@ def process_single_file(args_tuple):
             else:
                  return [{'status': 'skipped_midi_tokenization_invalid_output', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
-            if not raw_midi_ids or len(raw_midi_ids) < config.MIN_CHUNK_LEN_MIDI_TOKENS:
+            if not raw_midi_ids or len(raw_midi_ids) < config.MIN_CHUNK_LEN_MIDI:
                 return [{'status': 'skipped_too_short_after_tokenization', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(raw_midi_ids)}]
 
             chunked_samples = []
-            effective_chunk_len_for_data = config.MAX_SEQ_LEN_MIDI_TOKENS - 2 
+            effective_chunk_len_for_data = config.MAX_SEQ_LEN_MIDI - 2 
             
-            if effective_chunk_len_for_data < config.MIN_CHUNK_LEN_MIDI_TOKENS:
-                 logging.error(f"Configuration error: effective_chunk_len_for_data is less than MIN_CHUNK_LEN_MIDI_TOKENS.")
+            if effective_chunk_len_for_data < config.MIN_CHUNK_LEN_MIDI:
+                 logging.error(f"Configuration error: effective_chunk_len_for_data is less than MIN_CHUNK_LEN_MIDI.")
                  return [{'status': 'skipped_chunk_config_error', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
             num_file_chunks = 0
             for i in range(0, len(raw_midi_ids), effective_chunk_len_for_data):
                 chunk_token_ids = raw_midi_ids[i : i + effective_chunk_len_for_data]
-                if len(chunk_token_ids) < config.MIN_CHUNK_LEN_MIDI_TOKENS:
+                if len(chunk_token_ids) < config.MIN_CHUNK_LEN_MIDI:
                     if num_file_chunks == 0:
                          return [{'status': 'skipped_first_chunk_too_short', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(chunk_token_ids)}]
                     break
