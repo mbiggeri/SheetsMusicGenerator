@@ -21,6 +21,7 @@ import re
 import numpy as np
 import argparse
 from tokenize_metadata import tokenize_metadata
+import config
 
 # --- USAGE: ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS 
@@ -31,38 +32,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- Configurazione / Costanti ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Configurazioni Tokenizer MIDI (scegliere una strategia)
-MIDI_TOKENIZER_STRATEGY = miditok.REMI # Esempio scelto
-MIDI_VOCAB_TARGET_SIZE = 50000 # Esempio: Dimensione target per il vocabolario MIDI se addestrato
-
-# Token Speciali MIDI (allineati con le convenzioni di miditok)
-MIDI_PAD_TOKEN_NAME = "PAD_None"
-MIDI_SOS_TOKEN_NAME = "SOS_None"
-MIDI_EOS_TOKEN_NAME = "EOS_None"
-MIDI_UNK_TOKEN_NAME = "UNK_None"
-
-# Token Speciali per Metadati (possono rimanere custom)
-META_PAD_TOKEN_NAME = "<pad_meta>"
-META_UNK_TOKEN_NAME = "<unk_meta>"
-META_SOS_TOKEN_NAME = "<sos_meta>"
-META_EOS_TOKEN_NAME = "<eos_meta>"
-
 # Iperparametri del Modello e Addestramento (Esempi!)
 EPOCHS = 100
-BATCH_SIZE = 128 # Riduci se hai poca memoria GPU
-ACCUMULATION_STEPS = 2  # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
+BATCH_SIZE = 64 # Riduci se hai poca memoria GPU
+ACCUMULATION_STEPS = 4  # Definisce quanti "micro-batch" elaborare prima di un aggiornamento dei pesi.
 LEARNING_RATE = 0.0001
 EMB_SIZE = 256 # Dimensione embedding
 NHEAD = 4 # Numero di head nell'attention (deve dividere EMB_SIZE)
 FFN_HID_DIM = 1024 # Dimensione layer nascosto FeedForward
-NUM_ENCODER_LAYERS = 4
-NUM_DECODER_LAYERS = 4
+NUM_ENCODER_LAYERS = 6
+NUM_DECODER_LAYERS = 6
 DROPOUT = 0.1
-MAX_SEQ_LEN_MIDI = 2048 # Lunghezza massima sequenza MIDI
-MAX_SEQ_LEN_META = 128 # Aumentata per includere potenziale titolo lungo
 
-# Programmi MIDI considerati come "pianoforte"
-PIANO_PROGRAMS = list(range(0, 8))
 
 # Setup Logging (opzionale ma utile)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -74,12 +55,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
     """Costruisce o carica il tokenizer MIDI e la sua configurazione/vocabolario."""
-    special_tokens = [MIDI_PAD_TOKEN_NAME, MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME, MIDI_UNK_TOKEN_NAME]
+    special_tokens = [config.MIDI_PAD_TOKEN_NAME, config.MIDI_SOS_TOKEN_NAME, config.MIDI_EOS_TOKEN_NAME, config.MIDI_UNK_TOKEN_NAME]
 
     if VOCAB_PATH.exists() and not force_build:
         logging.info(f"Caricamento configurazione tokenizer MIDI da {VOCAB_PATH}")
         try:
-            tokenizer = MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
+            tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
             logging.info(f"Tokenizer caricato con successo da {VOCAB_PATH}")
         except Exception as e:
              logging.error(f"Errore nel caricare parametri tokenizer da {VOCAB_PATH}. Errore: {e}", exc_info=True)
@@ -87,7 +68,7 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
              return build_or_load_tokenizer(midi_file_paths=midi_file_paths, force_build=True)
     else:
         logging.info("Creazione nuova configurazione tokenizer MIDI...")
-        tokenizer_config_special_tokens = [MIDI_PAD_TOKEN_NAME, MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME, MIDI_UNK_TOKEN_NAME]
+        tokenizer_config_special_tokens = [config.MIDI_PAD_TOKEN_NAME, config.MIDI_SOS_TOKEN_NAME, config.MIDI_EOS_TOKEN_NAME, config.MIDI_UNK_TOKEN_NAME]
         
         tokenizer_params = miditok.TokenizerConfig(
             special_tokens=tokenizer_config_special_tokens,
@@ -101,22 +82,22 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
             use_velocities=True,
         )
         
-        tokenizer = MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
-        logging.info(f"Tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} inizializzato con use_programs=True, one_token_stream_for_programs=True.")
+        tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
+        logging.info(f"Tokenizer {config.MIDI_TOKENIZER_STRATEGY.__name__} inizializzato con use_programs=True, one_token_stream_for_programs=True.")
 
         if midi_file_paths:
             # if hasattr(tokenizer, 'train'):      Esegui questa se vuoi che venga costruito un vocabolario finale più piccolo con BPE o simili a partire da quello generato con la strategy
             logging.info(f"Numero di file MIDI forniti per l'addestramento: {len(midi_file_paths)}")    
-            if MIDI_TOKENIZER_STRATEGY != miditok.TSD and MIDI_TOKENIZER_STRATEGY != miditok.REMI and hasattr(tokenizer, 'train'):          
+            if config.MIDI_TOKENIZER_STRATEGY != miditok.TSD and config.MIDI_TOKENIZER_STRATEGY != miditok.REMI and hasattr(tokenizer, 'train'):          
                 logging.info(f"Entro nel blocco if hasattr(tokenizer, 'train')") # Conferma
                 try:
                     logging.info(f"Dimensione vocabolario PRIMA di tokenizer.train: {len(tokenizer)}")
-                    tokenizer.train(vocab_size=MIDI_VOCAB_TARGET_SIZE, files_paths=midi_file_paths)
+                    tokenizer.train(vocab_size=config.MIDI_VOCAB_TARGET_SIZE, files_paths=midi_file_paths)
                     logging.info(f"Dimensione vocabolario DOPO tokenizer.train: {len(tokenizer)}")
                 except Exception as e:
                     logging.error(f"Errore durante tokenizer.train: {e}", exc_info=True)
             else:
-                logging.info(f"Il tokenizer {MIDI_TOKENIZER_STRATEGY.__name__} non ha il metodo .train()")
+                logging.info(f"Il tokenizer {config.MIDI_TOKENIZER_STRATEGY.__name__} non ha il metodo .train()")
         else:
             logging.warning("Nessun file MIDI fornito per l'addestramento del tokenizer durante la costruzione. "
                             "Il vocabolario potrebbe essere subottimale se l'addestramento (es. BPE) è necessario per la strategia scelta.")
@@ -129,13 +110,13 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
 
     missing_ids_info = {}
     try:
-        pad_id_check = tokenizer[MIDI_PAD_TOKEN_NAME]
-        sos_id_check = tokenizer[MIDI_SOS_TOKEN_NAME]
-        eos_id_check = tokenizer[MIDI_EOS_TOKEN_NAME]
-        unk_id_check = tokenizer[MIDI_UNK_TOKEN_NAME]
+        pad_id_check = tokenizer[config.MIDI_PAD_TOKEN_NAME]
+        sos_id_check = tokenizer[config.MIDI_SOS_TOKEN_NAME]
+        eos_id_check = tokenizer[config.MIDI_EOS_TOKEN_NAME]
+        unk_id_check = tokenizer[config.MIDI_UNK_TOKEN_NAME]
         logging.info(f"ID Token Speciali MIDI recuperati - PAD: {pad_id_check}, SOS: {sos_id_check}, EOS: {eos_id_check}, UNK: {unk_id_check}")
 
-        if pad_id_check is None: missing_ids_info[MIDI_PAD_TOKEN_NAME] = "Non trovato (None)"
+        if pad_id_check is None: missing_ids_info[config.MIDI_PAD_TOKEN_NAME] = "Non trovato (None)"
         # Continua per altri token speciali...
     except Exception as e:
         logging.error(f"Errore durante l'accesso agli ID dei token speciali MIDI: {e}", exc_info=True)
@@ -160,7 +141,7 @@ def load_metadata_vocab(vocab_path):
     token_to_id = vocab_data['token_to_id']
     
     # Verifica che i token speciali necessari esistano
-    required_specials = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]
+    required_specials = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]
     missing = [t for t in required_specials if t not in token_to_id]
     if missing:
         logging.error(f"ERRORE CRITICO: Token speciali metadati mancanti nel file caricato: {missing}.")
@@ -189,14 +170,14 @@ class MutopiaDataset(Dataset):
         # self.min_chunk_len_midi = min_chunk_len_midi # Assuming pre-chunked data is already filtered
 
         try:
-            self.meta_pad_id = metadata_vocab_map[META_PAD_TOKEN_NAME]
-            self.sos_meta_id = metadata_vocab_map[META_SOS_TOKEN_NAME]
-            self.eos_meta_id = metadata_vocab_map[META_EOS_TOKEN_NAME]
-            self.unk_meta_id = metadata_vocab_map[META_UNK_TOKEN_NAME]
+            self.meta_pad_id = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
+            self.sos_meta_id = metadata_vocab_map[config.META_SOS_TOKEN_NAME]
+            self.eos_meta_id = metadata_vocab_map[config.META_EOS_TOKEN_NAME]
+            self.unk_meta_id = metadata_vocab_map[config.META_UNK_TOKEN_NAME]
             
-            self.sos_midi_id = midi_tokenizer[MIDI_SOS_TOKEN_NAME]
-            self.eos_midi_id = midi_tokenizer[MIDI_EOS_TOKEN_NAME]
-            self.midi_pad_id = midi_tokenizer[MIDI_PAD_TOKEN_NAME]
+            self.sos_midi_id = midi_tokenizer[config.MIDI_SOS_TOKEN_NAME]
+            self.eos_midi_id = midi_tokenizer[config.MIDI_EOS_TOKEN_NAME]
+            self.midi_pad_id = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
             if None in [self.sos_midi_id, self.eos_midi_id, self.midi_pad_id,
                         self.meta_pad_id, self.sos_meta_id, self.eos_meta_id, self.unk_meta_id]:
                 raise ValueError("Uno o più ID di token speciali non sono stati trovati.")
@@ -588,8 +569,8 @@ if __name__ == "__main__":
     MIDI_VOCAB_SIZE = len(midi_tokenizer)
     META_VOCAB_SIZE = len(metadata_vocab_map)
     try:
-        MIDI_PAD_ID = midi_tokenizer[MIDI_PAD_TOKEN_NAME]
-        META_PAD_ID = metadata_vocab_map[META_PAD_TOKEN_NAME]
+        MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
+        META_PAD_ID = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
     except KeyError as e:
         logging.error(f"ERRORE CRITICO: Token PAD non trovato dopo inizializzazione vocabolari: {e}")
         sys.exit(1)
@@ -600,10 +581,10 @@ if __name__ == "__main__":
     logging.info("--- Creazione Dataset e DataLoader (con dati pre-chunked) ---")
     try:
         train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, 
-                                     MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META,
+                                     config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META,
                                      splits_dir=SPLITS_DIR) # <-- AGGIUNGI QUESTO
         val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map,
-                                   MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META,
+                                   config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META,
                                    splits_dir=SPLITS_DIR) # <-- AGGIUNGI QUESTO
     except Exception as e:
         logging.error(f"Errore creazione Dataset: {e}", exc_info=True)
@@ -656,7 +637,7 @@ if __name__ == "__main__":
         val_dataloader = None # Handle case with no validation data
 
     logging.info("--- Inizializzazione Modello ---")
-    max_pe_len_calculated = max(MAX_SEQ_LEN_MIDI, MAX_SEQ_LEN_META) + 100 
+    max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100 
 
     model = Seq2SeqTransformer(
         NUM_ENCODER_LAYERS, NUM_DECODER_LAYERS, EMB_SIZE, NHEAD,
@@ -679,8 +660,8 @@ if __name__ == "__main__":
     vocab_info_to_save = {
         'midi_vocab_path': str(VOCAB_PATH), 'metadata_vocab_path': str(METADATA_VOCAB_PATH),
         'midi_pad_id': MIDI_PAD_ID, 'meta_pad_id': META_PAD_ID,
-        'MAX_SEQ_LEN_MIDI': MAX_SEQ_LEN_MIDI, 'MAX_SEQ_LEN_META': MAX_SEQ_LEN_META,
-        'midi_tokenizer_strategy': MIDI_TOKENIZER_STRATEGY.__name__ # Store strategy name
+        'MAX_SEQ_LEN_MIDI': config.MAX_SEQ_LEN_MIDI, 'MAX_SEQ_LEN_META': config.MAX_SEQ_LEN_META,
+        'midi_tokenizer_strategy': config.MIDI_TOKENIZER_STRATEGY.__name__ # Store strategy name
     }
 
     logging.info("--- Inizio Addestramento ---")

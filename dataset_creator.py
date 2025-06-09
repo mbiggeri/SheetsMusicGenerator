@@ -23,6 +23,7 @@ import multiprocessing
 import psutil   # for auto-calibrating best number of workers
 import collections
 from tokenize_metadata import tokenize_metadata
+import config
 
 @contextmanager
 def suppress_cpp_warnings():
@@ -61,6 +62,7 @@ warnings.filterwarnings('ignore', module='music21')
 
 # --- USAGE ---
 # python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked --force_tokenizer_build --transpose_piano_only --fast
+# --delete_skipped_files (delete all files not included in the final dataset)  --dry_run_delete (simulate the deletion without actually deleting files)
 # EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset --output_mode chunked --force_tokenizer_build --fast
 
 # --- Additions for Tokenization and Chunking ---
@@ -108,35 +110,9 @@ GM_INSTRUMENT_MAP = {
     127: "Gunshot"
 }
 
-# --- MIDI Tokenizer Specific Configurations (mirror from training.py or centralize) ---
-MIDI_TOKENIZER_STRATEGY = miditok.REMI
-MIDI_PAD_TOKEN_NAME = "PAD_None"
-MIDI_SOS_TOKEN_NAME = "SOS_None"
-MIDI_EOS_TOKEN_NAME = "EOS_None"
-MIDI_UNK_TOKEN_NAME = "UNK_None"
-
-# Chunking parameters
-MAX_SEQ_LEN_MIDI_TOKENS = 2048
-MIN_CHUNK_LEN_MIDI_TOKENS = 128
-
-PIANO_PROGRAMS = list(range(0, 8))
-PROCESSING_MODE = "piano_only"  # or "multi_instrument_stream"
-
-# Global tokenizer (initialized in main)
-MIDI_TOKENIZER = None
-
-# Token Speciali per Metadati (possono rimanere custom)
-META_PAD_TOKEN_NAME = "<pad_meta>"
-META_UNK_TOKEN_NAME = "<unk_meta>"
-META_SOS_TOKEN_NAME = "<sos_meta>"
-META_EOS_TOKEN_NAME = "<eos_meta>"
-
-# --- Nuove configurazioni per la trasposizione ---
-TRANSPOSITION_MODE = "auto_transpose_to_c_major_a_minor" # "none", "auto_transpose_to_c_major_a_minor"
-REFERENCE_KEY_MAJOR = "C"
-REFERENCE_KEY_MINOR = "A"
-REFERENCE_KEY_MAJOR_M21 = music21.key.Key('C', 'major')
-REFERENCE_KEY_MINOR_M21 = music21.key.Key('a', 'minor')
+# --- Configurazione del Tokenizer MIDI ---
+REFERENCE_KEY_MAJOR_M21 = music21.key.Key(config.REFERENCE_KEY_MAJOR, 'major')
+REFERENCE_KEY_MINOR_M21 = music21.key.Key(config.REFERENCE_KEY_MINOR, 'minor')
 
 
 # Mappa per convertire le firme di chiave di mido in scostamenti di semitoni dalla chiave di riferimento
@@ -171,7 +147,7 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
     Simplified version for dataset creator focusing on loading an existing vocab
     or building it if a representative set of MIDI files is provided.
     """
-    special_tokens = [MIDI_PAD_TOKEN_NAME, MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME, MIDI_UNK_TOKEN_NAME]
+    special_tokens = [config.MIDI_PAD_TOKEN_NAME, config.MIDI_SOS_TOKEN_NAME, config.MIDI_EOS_TOKEN_NAME, config.MIDI_UNK_TOKEN_NAME]
     tokenizer_params = miditok.TokenizerConfig(
         special_tokens=special_tokens,
         use_programs=True, # Ensure these match training.py
@@ -187,7 +163,7 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
     if VOCAB_PATH.exists() and not force_build:
         logging.info(f"Loading MIDI tokenizer configuration from {VOCAB_PATH}")
         try:
-            tokenizer = MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
+            tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
             logging.info(f"Tokenizer loaded successfully from {VOCAB_PATH}")
         except Exception as e:
             logging.error(f"Error loading tokenizer params from {VOCAB_PATH}. Error: {e}", exc_info=True)
@@ -195,10 +171,10 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
             if not midi_file_paths_for_vocab_build:
                 logging.error("Cannot build tokenizer: no MIDI files for vocab build provided.")
                 raise
-            tokenizer = MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
+            tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
             # Training part is optional here if vocab is pre-built by training script first
             # but good to have if this script is run standalone to create vocab
-            if hasattr(tokenizer, 'train') and MIDI_TOKENIZER_STRATEGY != miditok.TSD and MIDI_TOKENIZER_STRATEGY != miditok.REMI: # REMI/TSD don't train BPE
+            if hasattr(tokenizer, 'train') and config.MIDI_TOKENIZER_STRATEGY != miditok.TSD and config.MIDI_TOKENIZER_STRATEGY != miditok.REMI: # REMI/TSD don't train BPE
                 logging.info(f"Training tokenizer with {len(midi_file_paths_for_vocab_build)} files for vocab.")
                 tokenizer.train(vocab_size=50000, files_paths=midi_file_paths_for_vocab_build) # Example target size
                 VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -218,8 +194,8 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
             raise FileNotFoundError("VOCAB_PATH not found and no files to build it.")
             
         logging.info("Creating new MIDI tokenizer configuration...")
-        tokenizer = MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
-        if hasattr(tokenizer, 'train') and MIDI_TOKENIZER_STRATEGY != miditok.TSD and MIDI_TOKENIZER_STRATEGY != miditok.REMI:
+        tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
+        if hasattr(tokenizer, 'train') and config.MIDI_TOKENIZER_STRATEGY != miditok.TSD and config.MIDI_TOKENIZER_STRATEGY != miditok.REMI:
             logging.info(f"Training tokenizer with {len(midi_file_paths_for_vocab_build)} files for vocab.")
             tokenizer.train(vocab_size=50000, files_paths=midi_file_paths_for_vocab_build) # Example
         
@@ -229,9 +205,9 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
 
     # Verify special tokens
     try:
-        assert tokenizer[MIDI_PAD_TOKEN_NAME] is not None
-        assert tokenizer[MIDI_SOS_TOKEN_NAME] is not None
-        assert tokenizer[MIDI_EOS_TOKEN_NAME] is not None
+        assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
+        assert tokenizer[config.MIDI_SOS_TOKEN_NAME] is not None
+        assert tokenizer[config.MIDI_EOS_TOKEN_NAME] is not None
     except AssertionError:
         logging.error("CRITICAL: One or more special MIDI tokens not found in tokenizer after load/build.")
         raise ValueError("Special MIDI tokens missing in tokenizer.")
@@ -390,6 +366,7 @@ def process_single_file(args_tuple):
     if not mido_check_result['passed']:
         return [{'status': f"skipped_{mido_check_result['reason']}",
                 'filename': midi_file_path.name,
+                'skipped_path': str(midi_file_path),
                 'detail': mido_check_result.get('detail', '')}]
 
     # >>> NUOVA MODIFICA: Filtro preventivo sul numero di strumenti <<<
@@ -398,6 +375,7 @@ def process_single_file(args_tuple):
     if len(mido_check_result.get('midi_instruments', [])) > 16:
         return [{'status': 'skipped_too_many_instruments',
                  'filename': midi_file_path.name,
+                 'skipped_path': str(midi_file_path),
                  'instruments_found': len(mido_check_result.get('midi_instruments', []))}]
 
     final_metadata = {}
@@ -417,6 +395,7 @@ def process_single_file(args_tuple):
     if missing_essentials:
         return [{'status': 'skipped_mido_missing_metadata',
                 'filename': midi_file_path.name,
+                'skipped_path': str(midi_file_path),
                 'missing': missing_essentials}]
 
     try:
@@ -432,7 +411,9 @@ def process_single_file(args_tuple):
     elif output_mode == "chunked":
         if MIDI_TOKENIZER is None:
              logging.error(f"MIDI_TOKENIZER is None in worker for {midi_file_path}, cannot proceed with chunking.")
-             return [{'status': 'skipped_tokenizer_not_init', 'filename': midi_file_path.name}]
+             return [{'status': 'skipped_tokenizer_not_init',
+                      'skipped_path': str(midi_file_path),
+                      'filename': midi_file_path.name}]
         
         # >>> INIZIO BLOCCO TRY/EXCEPT PRINCIPALE MODIFICATO <<<
         try:
@@ -446,7 +427,7 @@ def process_single_file(args_tuple):
                 score_m21 = converter.parse(str(midi_file_path))
 
                 # La trasposizione si applica solo in modalità piano_only
-                if transposition_enabled and PROCESSING_MODE == "piano_only":
+                if transposition_enabled and config.PROCESSING_MODE == "piano_only":
                     key_analysis = None # Oggetto che conterrà la tonalità di music21
                     
                     # 1. Recupera la tonalità dichiarata da Mido
@@ -513,28 +494,28 @@ def process_single_file(args_tuple):
                 with suppress_cpp_warnings():
                     score = Score(midi_file_path)
                 
-                if transposition_enabled and PROCESSING_MODE == "piano_only":
+                if transposition_enabled and config.PROCESSING_MODE == "piano_only":
                     declared_key = mido_check_result.get('key_signature_declared')
                     if declared_key:
-                        transposition_semitones = get_transposition_semitones(declared_key, REFERENCE_KEY_MAJOR, REFERENCE_KEY_MINOR)
+                        transposition_semitones = get_transposition_semitones(declared_key, config.REFERENCE_KEY_MAJOR, config.REFERENCE_KEY_MINOR)
                         if transposition_semitones != 0:
                             score = transpose_score(score, transposition_semitones)
-                            final_metadata['transposed_to_key'] = f"{REFERENCE_KEY_MAJOR} major / {REFERENCE_KEY_MINOR} minor"
+                            final_metadata['transposed_to_key'] = f"{config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor"
                             final_metadata['original_key_mido'] = declared_key
                             final_metadata['transposition_semitones'] = transposition_semitones
             
             # --- DA QUI, LA LOGICA È COMUNE A ENTRAMBE LE MODALITÀ ---
             if score is None:
                 # Questo può succedere se un percorso logico fallisce
-                return [{'status': 'skipped_score_not_generated', 'filename': midi_file_path.name}]
+                return [{'status': 'skipped_score_not_generated', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
             
-            if PROCESSING_MODE == "piano_only":
-                piano_tracks_present = [track for track in score.tracks if track.program in PIANO_PROGRAMS]
+            if config.PROCESSING_MODE == "piano_only":
+                piano_tracks_present = [track for track in score.tracks if track.program in config.PIANO_PROGRAMS]
                 if not piano_tracks_present:
-                    return [{'status': 'skipped_no_piano_tracks', 'filename': midi_file_path.name}]
+                    return [{'status': 'skipped_no_piano_tracks', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
                 score.tracks = piano_tracks_present
                 if len(score.tracks) == 0:
-                    return [{'status': 'skipped_no_piano_tracks_after_filter', 'filename': midi_file_path.name}]
+                    return [{'status': 'skipped_no_piano_tracks_after_filter', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
             midi_tokens_output = MIDI_TOKENIZER(score)
 
@@ -545,26 +526,26 @@ def process_single_file(args_tuple):
                 elif all(isinstance(item, int) for item in midi_tokens_output.ids):
                     raw_midi_ids = midi_tokens_output.ids
                 else:
-                    return [{'status': 'skipped_midi_tokenization_unexpected_format', 'filename': midi_file_path.name}]
+                    return [{'status': 'skipped_midi_tokenization_unexpected_format', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
             else:
-                 return [{'status': 'skipped_midi_tokenization_invalid_output', 'filename': midi_file_path.name}]
+                 return [{'status': 'skipped_midi_tokenization_invalid_output', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
-            if not raw_midi_ids or len(raw_midi_ids) < MIN_CHUNK_LEN_MIDI_TOKENS:
-                return [{'status': 'skipped_too_short_after_tokenization', 'filename': midi_file_path.name, 'token_count': len(raw_midi_ids)}]
+            if not raw_midi_ids or len(raw_midi_ids) < config.MIN_CHUNK_LEN_MIDI_TOKENS:
+                return [{'status': 'skipped_too_short_after_tokenization', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(raw_midi_ids)}]
 
             chunked_samples = []
-            effective_chunk_len_for_data = MAX_SEQ_LEN_MIDI_TOKENS - 2 
+            effective_chunk_len_for_data = config.MAX_SEQ_LEN_MIDI_TOKENS - 2 
             
-            if effective_chunk_len_for_data < MIN_CHUNK_LEN_MIDI_TOKENS:
+            if effective_chunk_len_for_data < config.MIN_CHUNK_LEN_MIDI_TOKENS:
                  logging.error(f"Configuration error: effective_chunk_len_for_data is less than MIN_CHUNK_LEN_MIDI_TOKENS.")
-                 return [{'status': 'skipped_chunk_config_error', 'filename': midi_file_path.name}]
+                 return [{'status': 'skipped_chunk_config_error', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
             num_file_chunks = 0
             for i in range(0, len(raw_midi_ids), effective_chunk_len_for_data):
                 chunk_token_ids = raw_midi_ids[i : i + effective_chunk_len_for_data]
-                if len(chunk_token_ids) < MIN_CHUNK_LEN_MIDI_TOKENS:
+                if len(chunk_token_ids) < config.MIN_CHUNK_LEN_MIDI_TOKENS:
                     if num_file_chunks == 0:
-                         return [{'status': 'skipped_first_chunk_too_short', 'filename': midi_file_path.name, 'token_count': len(chunk_token_ids)}]
+                         return [{'status': 'skipped_first_chunk_too_short', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(chunk_token_ids)}]
                     break
 
                 chunk_id = f"{midi_file_path.stem}_chunk{num_file_chunks}"
@@ -589,7 +570,7 @@ def process_single_file(args_tuple):
                 num_file_chunks +=1
             
             if not chunked_samples:
-                return [{'status': 'skipped_no_valid_chunks_created', 'filename': midi_file_path.name, 'total_tokens': len(raw_midi_ids)}]
+                return [{'status': 'skipped_no_valid_chunks_created', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'total_tokens': len(raw_midi_ids)}]
 
             return chunked_samples
 
@@ -597,19 +578,19 @@ def process_single_file(args_tuple):
         except IndexError as e:
             # Cattura specificamente l'errore che ha causato il crash
             logging.warning(f"Caught IndexError (likely >15 instruments) in music21 for {midi_file_path.name}: {e}. Skipping file.")
-            return [{'status': 'skipped_music21_index_error', 'filename': midi_file_path.name, 'detail': str(e)}]
+            return [{'status': 'skipped_music21_index_error', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'detail': str(e)}]
         except Music21Exception as e:
             logging.warning(f"Music21 related error for {midi_file_path.name}: {e}")
-            return [{'status': 'skipped_music21_error', 'filename': midi_file_path.name, 'detail': str(e)}]
+            return [{'status': 'skipped_music21_error', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'detail': str(e)}]
         except FileNotFoundError:
              logging.warning(f"File not found by music21/symusic for tokenization: {midi_file_path.name}")
-             return [{'status': 'skipped_file_not_found_for_tokenization', 'filename': midi_file_path.name}]
+             return [{'status': 'skipped_file_not_found_for_tokenization', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
         except Exception as e: # Cattura qualsiasi altro errore imprevisto
             logging.error(f"Unexpected error during chunking for {midi_file_path.name}: {e}", exc_info=False) # exc_info=False per non riempire il log
-            return [{'status': 'skipped_chunking_unexpected_error', 'filename': midi_file_path.name, 'detail': str(e)}]
+            return [{'status': 'skipped_chunking_unexpected_error', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'detail': str(e)}]
     else:
         logging.error(f"Unknown output mode: {output_mode}")
-        return [{'status': 'skipped_unknown_output_mode', 'filename': midi_file_path.name}]
+        return [{'status': 'skipped_unknown_output_mode', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
 
 def save_dataset_split(data, filename):
     output_path = OUTPUT_DIR / f"{filename}.jsonl"
@@ -728,7 +709,7 @@ def build_metadata_vocabs_and_frequencies(all_metadata_examples):
             frequency_counter.update(tokens)
 
     # Crea il vocabolario token -> id
-    special_tokens = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]
+    special_tokens = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]
     all_tokens_list = special_tokens + sorted(list(metadata_tokens))
     
     # Rimuovi duplicati mantenendo l'ordine (se un token metadato avesse lo stesso nome di uno speciale)
@@ -738,10 +719,10 @@ def build_metadata_vocabs_and_frequencies(all_metadata_examples):
     token_to_id = {token: i for i, token in enumerate(unique_tokens_ordered)}
     
     # Assicura che PAD sia a 0
-    if token_to_id.get(META_PAD_TOKEN_NAME) != 0:
+    if token_to_id.get(config.META_PAD_TOKEN_NAME) != 0:
         logging.warning(f"ID del META_PAD_TOKEN_NAME non era 0. Riassegno gli ID per coerenza.")
         # Crea una nuova lista ordinata con PAD all'inizio
-        pad_token = META_PAD_TOKEN_NAME
+        pad_token = config.META_PAD_TOKEN_NAME
         other_tokens = [tok for tok in unique_tokens_ordered if tok != pad_token]
         final_tokens_list = [pad_token] + other_tokens
         token_to_id = {token: i for i, token in enumerate(final_tokens_list)}
@@ -786,7 +767,7 @@ def build_or_load_metadata_vocab(all_metadata_examples, METADATA_VOCAB_PATH, for
         with open(METADATA_VOCAB_PATH, 'r', encoding='utf-8') as f:
             vocab_data = json.load(f)
         token_to_id = vocab_data['token_to_id']
-        required_specials = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]
+        required_specials = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]
         missing = [t for t in required_specials if t not in token_to_id]
         if missing:
              logging.warning(f"Token speciali metadati mancanti nel file caricato: {missing}. Ricostruisco.")
@@ -800,15 +781,15 @@ def build_or_load_metadata_vocab(all_metadata_examples, METADATA_VOCAB_PATH, for
             tokens = tokenize_metadata(meta_dict)
             metadata_tokens.update(tokens)
 
-        all_tokens_list = [META_PAD_TOKEN_NAME, META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME] + sorted(list(metadata_tokens))
+        all_tokens_list = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME] + sorted(list(metadata_tokens))
         token_to_id = {token: i for i, token in enumerate(all_tokens_list)}
         id_to_token = {i: token for token, i in token_to_id.items()}
 
-        if token_to_id[META_PAD_TOKEN_NAME] != 0:
-            logging.warning(f"ID del META_PAD_TOKEN_NAME ({META_PAD_TOKEN_NAME}) non è 0. Riassegno gli ID per coerenza con ignore_index.")
+        if token_to_id[config.META_PAD_TOKEN_NAME] != 0:
+            logging.warning(f"ID del META_PAD_TOKEN_NAME ({config.META_PAD_TOKEN_NAME}) non è 0. Riassegno gli ID per coerenza con ignore_index.")
             # Riassegna per avere PAD = 0
-            pad_tok = META_PAD_TOKEN_NAME
-            other_specials = [t for t in [META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME] if t in token_to_id] # quelli già presenti
+            pad_tok = config.META_PAD_TOKEN_NAME
+            other_specials = [t for t in [config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME] if t in token_to_id] # quelli già presenti
             unique_metadata_tokens_sorted = sorted(list(metadata_tokens))
             
             all_tokens_reordered = [pad_tok] + \
@@ -816,7 +797,7 @@ def build_or_load_metadata_vocab(all_metadata_examples, METADATA_VOCAB_PATH, for
                                    [mt for mt in unique_metadata_tokens_sorted if mt not in [pad_tok] + other_specials]
             # Assicura che tutti i token originali siano presenti, specialmente se un token metadato avesse lo stesso nome di uno speciale
             final_token_set = set(all_tokens_reordered)
-            for special_tok_defined in [META_UNK_TOKEN_NAME, META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME]:
+            for special_tok_defined in [config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]:
                 if special_tok_defined not in final_token_set:
                     all_tokens_reordered.append(special_tok_defined)
             
@@ -830,7 +811,7 @@ def build_or_load_metadata_vocab(all_metadata_examples, METADATA_VOCAB_PATH, for
 
             token_to_id = {token: i for i, token in enumerate(all_tokens_final_unique_ordered)}
             id_to_token = {i: token for token, i in token_to_id.items()}
-            logging.info(f"Nuovo ID META_PAD_TOKEN_NAME: {token_to_id.get(META_PAD_TOKEN_NAME, 'NON TROVATO DOPO RIORDINO')}")
+            logging.info(f"Nuovo ID META_PAD_TOKEN_NAME: {token_to_id.get(config.META_PAD_TOKEN_NAME, 'NON TROVATO DOPO RIORDINO')}")
 
 
         vocab_data = {'token_to_id': token_to_id, 'id_to_token': id_to_token}
@@ -867,7 +848,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--transpose_piano_only",
         action="store_true",
-        help=f"Enable automatic transposition to {REFERENCE_KEY_MAJOR} major / {REFERENCE_KEY_MINOR} minor "
+        help=f"Enable automatic transposition to {config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor "
              f"for 'piano_only' processing mode when in 'chunked' output mode."
     )
     parser.add_argument(
@@ -875,15 +856,32 @@ if __name__ == "__main__":
         action="store_true", # Questo rende --fast un flag booleano
         help="Use fast processing mode, skipping music21 analysis and using mido-declared keys for transposition."
     )
+    destructive_group = parser.add_argument_group(
+        'Operazioni Distruttive (Usare con Cautela!)'
+    )
+    destructive_group.add_argument(
+        "--delete_skipped_files",
+        action="store_true",
+        help="ATTIVA MODALITÀ DISTRUTTIVA: Elimina permanentemente i file MIDI sorgente che vengono scartati "
+             "durante il processo di creazione del dataset. Usare con estrema cautela."
+    )
+    destructive_group.add_argument(
+        "--dry_run_delete",
+        action="store_true",
+        help="Esegue una simulazione (dry run) dell'eliminazione. Mostra quali file verrebbero eliminati "
+             "da --delete_skipped_files senza cancellarli effettivamente. Consigliato prima di usare l'opzione di eliminazione."
+    )
     args = parser.parse_args()
 
     # --- DEFINIZIONE DEI PERCORSI GLOBALI BASATA SUGLI ARGOMENTI ---
-    BASE_DATA_DIR = args.base_data_dir
-    MIDI_INPUT_DIR = BASE_DATA_DIR / "MIDI"
-    OUTPUT_DIR = BASE_DATA_DIR / "dataset_splits"
-    BINARY_CHUNKS_DIR = OUTPUT_DIR / "binary_chunks"
-    LOG_FILE = BASE_DATA_DIR / "dataset_processing.log"
-    VOCAB_PATH = BASE_DATA_DIR / "midi_vocab.json"
+    paths = config.get_project_paths(args.base_data_dir)
+
+    BASE_DATA_DIR = paths["base"]
+    MIDI_INPUT_DIR = paths["midi_input"]
+    OUTPUT_DIR = paths["output_splits"]
+    BINARY_CHUNKS_DIR = paths["binary_chunks"]
+    LOG_FILE = paths["log_file"]
+    VOCAB_PATH = paths["midi_vocab"]
     
     # Riconfigura il logging per usare il nuovo percorso del file di log
     # Rimuovi eventuali handler esistenti
@@ -904,7 +902,7 @@ if __name__ == "__main__":
 
     logging.info(f"--- Dataset Creation Script --- Base Directory: {BASE_DATA_DIR} ---")
     logging.info(f"Output Mode: {args.output_mode}")
-    logging.info(f"Transposition Enabled: {args.transpose_piano_only and PROCESSING_MODE == 'piano_only'}")
+    logging.info(f"Transposition Enabled: {args.transpose_piano_only and config.PROCESSING_MODE == 'piano_only'}")
 
     temp_midi_files_for_vocab = []
     # --- Nuovo Blocco con Campionamento Proporzionale ---
@@ -991,30 +989,56 @@ if __name__ == "__main__":
             tasks = [(path,) + task_args_template[1:] for path in midi_file_paths]
             
             logging.info(f"Utilizzo di {num_workers} processi worker per l'elaborazione principale.")
+            
+            if args.delete_skipped_files:
+                print("\n" + "="*80)
+                print("ATTENZIONE: MODALITÀ DISTRUTTIVA ATTIVATA (--delete_skipped_files).")
+                print("I file MIDI sorgente che vengono scartati verranno ELIMINATI PERMANENTEMENTE.")
+                print("Si consiglia di eseguire prima un --dry_run_delete.")
+                print("Processo in avvio tra 10 secondi...")
+                print("="*80 + "\n")
+                time.sleep(10)
+            
+            skipped_file_paths_to_delete = set()
+            successful_file_paths = set()
 
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=num_workers, 
                 initializer=init_worker if args.output_mode == "chunked" else None, 
-                initargs=(VOCAB_PATH, MIDI_TOKENIZER_STRATEGY) if args.output_mode == "chunked" else ()
+                initargs=(VOCAB_PATH, config.MIDI_TOKENIZER_STRATEGY) if args.output_mode == "chunked" else ()
             ) as executor:
                 
                 results_iterator = executor.map(process_single_file, tasks)
                 
                 progress_bar = tqdm(results_iterator, total=total_files_found, desc=f"Analisi MIDI ({args.output_mode})", unit="file")
                 
-                for file_results_list in progress_bar:
+                # Memorizza il percorso del file corrente dal task
+                current_file_path_iterator = (task[0] for task in tasks)
+                
+                for file_path, file_results_list in zip(current_file_path_iterator, progress_bar):
+                    is_successful = False
                     if not file_results_list:
                         failure_summary['unknown_empty_result'] = failure_summary.get('unknown_empty_result', 0) + 1
-                        continue
+                        is_successful = False
+                    else:
+                        # Un file è considerato di successo se almeno un chunk è stato creato con successo
+                        if any(res.get('status', '').startswith('success') for res in file_results_list):
+                            is_successful = True
+                        
+                        for result_item in file_results_list:
+                            status = result_item.get('status', 'unknown_status')
+                            if status.startswith('success'):
+                                all_processed_entries.append(result_item)
+                                num_success +=1
+                            else:
+                                failure_summary[status] = failure_summary.get(status, 0) + 1
                     
-                    for result_item in file_results_list:
-                        status = result_item.get('status', 'unknown_status')
-                        if status.startswith('success'):
-                            all_processed_entries.append(result_item)
-                            num_success +=1
-                        else:
-                            failure_summary[status] = failure_summary.get(status, 0) + 1
-                    
+                    # Aggiungi il percorso alla lista corretta
+                    if is_successful:
+                        successful_file_paths.add(str(file_path))
+                    else:
+                        skipped_file_paths_to_delete.add(str(file_path))
+
                     if args.output_mode == "classic" or num_success % 100 == 0 :
                         progress_bar.set_postfix_str(f"Valid items: {num_success}, Failures: {sum(failure_summary.values())}")
             
@@ -1083,5 +1107,41 @@ if __name__ == "__main__":
         logging.info(f"Salvato validation.jsonl con {len(val_data)} voci.")
         save_dataset_split(test_data, "test")
         logging.info(f"Salvato test.jsonl con {len(test_data)} voci.")
+    
+    # --- Fase di Eliminazione a Fine Script ---
+    if args.delete_skipped_files or args.dry_run_delete:
+        print("\n--- Fase di Pulizia dei File Sorgente ---")
+        logging.info("--- Fase di Pulizia dei File Sorgente ---")
+        
+        # Sicurezza aggiuntiva: non eliminare se non sono stati prodotti file di split
+        if not (OUTPUT_DIR / "train.jsonl").exists():
+            print("ERRORE: File di training non creato. Annullamento dell'operazione di eliminazione per sicurezza.")
+            logging.error("File di training non creato. Annullamento dell'operazione di eliminazione per sicurezza.")
+        else:
+            files_to_process = sorted(list(skipped_file_paths_to_delete))
+            if not files_to_process:
+                print("Nessun file scartato da eliminare.")
+                logging.info("Nessun file scartato da eliminare.")
+            else:
+                if args.dry_run_delete:
+                    print(f"[DRY RUN] Sono stati identificati {len(files_to_process)} file da eliminare:")
+                    logging.info(f"[DRY RUN] Sono stati identificati {len(files_to_process)} file da eliminare:")
+                    for f_path in files_to_process:
+                        print(f"  - [DRY RUN] Verrebbe eliminato: {f_path}")
+                        logging.info(f"  - [DRY RUN] Verrebbe eliminato: {f_path}")
+                else: # --delete_skipped_files è attivo
+                    print(f"PROCEDO CON L'ELIMINAZIONE di {len(files_to_process)} file scartati...")
+                    logging.info(f"PROCEDO CON L'ELIMINAZIONE di {len(files_to_process)} file scartati...")
+                    deleted_count = 0
+                    for f_path in tqdm(files_to_process, desc="Eliminazione file", unit="file"):
+                        try:
+                            os.remove(f_path)
+                            logging.info(f"Eliminato: {f_path}")
+                            deleted_count += 1
+                        except OSError as e:
+                            print(f"Errore durante l'eliminazione di {f_path}: {e}")
+                            logging.error(f"Errore durante l'eliminazione di {f_path}: {e}")
+                    print(f"Operazione completata. Eliminati {deleted_count} file.")
+                    logging.info(f"Operazione completata. Eliminati {deleted_count} file.")
 
     logging.info("--- Script Terminato ---")
