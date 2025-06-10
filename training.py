@@ -416,7 +416,7 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
     
     # --- 1. INIZIALIZZAZIONE DELLO SCHEDULER ---
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1)
     logging.info("Learning rate scheduler 'ReduceLROnPlateau' attivato con pazienza=3.")
     
     logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
