@@ -9,7 +9,7 @@ from tqdm import tqdm
 import logging
 
 # --- USAGE: python analyze_profiles.py --input_dir /path/to/jsonl_files --output_file /path/to/output/metadata_profiles.json --min_support 50 --max_profiles 100
-# --- EXAMPLE: python analyze_profiles.py --input_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset\dataset_splits --output_file C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset\dataset_splits --min_support 150 --max_profiles 100
+# --- EXAMPLE: python analyze_profiles.py --input_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_vG\dataset_splits --output_file C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_vG --min_support 150 --max_profiles 100
 
 # --- CONFIGURAZIONE ---
 PROCESSING_MODE = "piano_only" # or "multi_instrument_stream" # or "genres" 

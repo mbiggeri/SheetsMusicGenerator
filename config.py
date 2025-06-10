@@ -4,14 +4,6 @@
 import miditok
 from pathlib import Path
 
-# =============================================================================
-# --- CONFIGURAZIONI GENERALI DEL PROGETTO ---
-# =============================================================================
-
-# Modalità di processamento principale (usata per la logica di trasposizione e filtraggio)
-# Valori possibili: "piano_only", "multi_instrument_stream", "genres"
-PROCESSING_MODE = "genres"
-
 # Programmi MIDI considerati "pianoforte" (usato in modalità "piano_only")
 # General MIDI programs 0-7: Acoustic Grand, Bright Acoustic, Electric Grand, Honky-tonk,
 # Electric Piano 1, Electric Piano 2, Harpsichord, Clavinet.
@@ -31,6 +23,22 @@ MIDI_SOS_TOKEN_NAME = "SOS_None"
 MIDI_EOS_TOKEN_NAME = "EOS_None"
 MIDI_UNK_TOKEN_NAME = "UNK_None"
 
+# QUESTA CONFIGURAZIONE ABILITA REMI+
+TOKENIZER_PARAMS = miditok.TokenizerConfig(
+    special_tokens=[MIDI_PAD_TOKEN_NAME, MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME, MIDI_UNK_TOKEN_NAME],
+    
+    # PARAMETRI CHE DEFINISCONO REMI+
+    use_programs=True,                  # Abilita i token Program per gestire gli strumenti.
+    one_token_stream_for_programs=True, # Gestisce le tracce in un unico flusso, come richiesto da REMI+.
+    use_time_signatures=True,           # Abilita i token per i cambi di tempo (Time Signature).
+
+    # Altri parametri consigliati per una rappresentazione ricca
+    use_velocities=True,
+    use_chords=True,
+    use_tempos=True,
+    use_rests=True,
+    use_controls=False
+)
 
 # =============================================================================
 # --- IMPOSTAZIONI DEI TOKEN DEI METADATI ---

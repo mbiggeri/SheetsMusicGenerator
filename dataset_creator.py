@@ -61,9 +61,15 @@ def suppress_cpp_warnings():
 warnings.filterwarnings('ignore', module='music21')
 
 # --- USAGE ---
-# python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked --force_tokenizer_build --transpose_piano_only --fast
-# --delete_skipped_files (delete all files not included in the final dataset)  --dry_run_delete (simulate the deletion without actually deleting files)
-# EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\PianoDataset --output_mode chunked --force_tokenizer_build --fast --transpose_piano_only --delete_skipped_files
+# python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked --force_tokenizer_build
+# --piano_only (filter only piano channels) 
+# --extract_genre (use only genres as a metadata)
+# --transpose_piano_only (transpose piano notes to C major / A minor, use only with --piano_only)
+# --fast (fast control of keys from metadata -without inferring from music21-)
+# --delete_skipped_files (delete all files not included in the final dataset)
+# --dry_run_delete (simulate the deletion without actually deleting files)
+
+# EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_vG --output_mode chunked --force_tokenizer_build --fast --piano_only --extract_genre
 
 # --- Additions for Tokenization and Chunking ---
 import miditok
@@ -143,76 +149,51 @@ KEY_SEMITONE_MAP["Cb"] = KEY_SEMITONE_MAP["B"]
 
 def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, force_build=False):
     """
-    Builds or loads the MIDI tokenizer.
-    Simplified version for dataset creator focusing on loading an existing vocab
-    or building it if a representative set of MIDI files is provided.
+    Costruisce o carica il tokenizer MIDI utilizzando la configurazione centralizzata
+    da config.py e gestisce correttamente l'addestramento solo per i tokenizer supportati.
     """
-    special_tokens = [config.MIDI_PAD_TOKEN_NAME, config.MIDI_SOS_TOKEN_NAME, config.MIDI_EOS_TOKEN_NAME, config.MIDI_UNK_TOKEN_NAME]
-    tokenizer_params = miditok.TokenizerConfig(
-        special_tokens=special_tokens,
-        use_programs=True, # Ensure these match training.py
-        one_token_stream_for_programs=True,
-        program_changes=True,
-        use_chords=True,
-        use_rests=True,
-        use_tempos=True,
-        use_time_signatures=True,
-        use_velocities=True,
-    )
-    
+    # Utilizza direttamente la configurazione definita in config.py
+    tokenizer_params = config.TOKENIZER_PARAMS
+
+    VOCAB_PATH = config.get_project_paths(args.base_data_dir)["midi_vocab"]
+
     if VOCAB_PATH.exists() and not force_build:
-        logging.info(f"Loading MIDI tokenizer configuration from {VOCAB_PATH}")
+        logging.info(f"Caricamento del tokenizer MIDI da {VOCAB_PATH}")
         try:
             tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
-            logging.info(f"Tokenizer loaded successfully from {VOCAB_PATH}")
+            logging.info(f"Tokenizer caricato con successo da {VOCAB_PATH}")
         except Exception as e:
-            logging.error(f"Error loading tokenizer params from {VOCAB_PATH}. Error: {e}", exc_info=True)
-            logging.info("Attempting to build tokenizer from scratch (if MIDI files provided).")
-            if not midi_file_paths_for_vocab_build:
-                logging.error("Cannot build tokenizer: no MIDI files for vocab build provided.")
-                raise
-            tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
-            # Training part is optional here if vocab is pre-built by training script first
-            # but good to have if this script is run standalone to create vocab
-            if hasattr(tokenizer, 'train') and config.MIDI_TOKENIZER_STRATEGY != miditok.TSD and config.MIDI_TOKENIZER_STRATEGY != miditok.REMI: # REMI/TSD don't train BPE
-                logging.info(f"Training tokenizer with {len(midi_file_paths_for_vocab_build)} files for vocab.")
-                tokenizer.train(vocab_size=50000, files_paths=midi_file_paths_for_vocab_build) # Example target size
-                VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                tokenizer.save(str(VOCAB_PATH))
-                logging.info(f"Tokenizer trained and saved to {VOCAB_PATH}")
-            else:
-                 # For REMI, TSD, or if no .train method, the vocab is implicitly defined by the config.
-                 # We still save the config so it can be loaded with `params=path`.
-                VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                tokenizer.save(str(VOCAB_PATH)) # Saves the configuration including special tokens
-                logging.info(f"Tokenizer config (non-BPE or pre-defined) saved to {VOCAB_PATH}")
+            logging.error(f"Errore durante il caricamento del tokenizer da {VOCAB_PATH}: {e}", exc_info=True)
+            force_build = True
 
-
-    else: # Build from scratch
-        if not midi_file_paths_for_vocab_build:
-            logging.error("Cannot build tokenizer: vocab path doesn't exist and no MIDI files for vocab build provided.")
-            raise FileNotFoundError("VOCAB_PATH not found and no files to build it.")
-            
-        logging.info("Creating new MIDI tokenizer configuration...")
+    if not VOCAB_PATH.exists() or force_build:
+        logging.info("Creazione di una nuova configurazione per il tokenizer MIDI...")
         tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
-        if hasattr(tokenizer, 'train') and config.MIDI_TOKENIZER_STRATEGY != miditok.TSD and config.MIDI_TOKENIZER_STRATEGY != miditok.REMI:
-            logging.info(f"Training tokenizer with {len(midi_file_paths_for_vocab_build)} files for vocab.")
-            tokenizer.train(vocab_size=50000, files_paths=midi_file_paths_for_vocab_build) # Example
+
+        if midi_file_paths_for_vocab_build:
+            logging.info(f"Addestramento del tokenizer con {len(midi_file_paths_for_vocab_build)} file.")
+            tokenizer.train(
+                vocab_size=20000, 
+                model="BPE", 
+                files_paths=midi_file_paths_for_vocab_build
+            )
+            logging.info("Addestramento del tokenizer completato.")
         
         VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
         tokenizer.save(str(VOCAB_PATH))
-        logging.info(f"New tokenizer created, trained (if applicable), and saved to {VOCAB_PATH}")
+        logging.info(f"Configurazione del tokenizer salvata in {VOCAB_PATH}")
 
-    # Verify special tokens
     try:
         assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
         assert tokenizer[config.MIDI_SOS_TOKEN_NAME] is not None
         assert tokenizer[config.MIDI_EOS_TOKEN_NAME] is not None
     except AssertionError:
-        logging.error("CRITICAL: One or more special MIDI tokens not found in tokenizer after load/build.")
-        raise ValueError("Special MIDI tokens missing in tokenizer.")
-    logging.info(f"MIDI Tokenizer ready. Vocab size: {len(tokenizer)}")
+        logging.error("CRITICO: Token speciali MIDI mancanti nel tokenizer.")
+        raise ValueError("Token speciali MIDI mancanti nel tokenizer.")
+
+    logging.info(f"Tokenizer MIDI pronto. Dimensione vocabolario: {len(tokenizer)}")
     return tokenizer
+
 
 
 # --- Funzioni di Analisi (mido) ---
@@ -343,7 +324,9 @@ def get_transposition_semitones(declared_key: str, target_major: str, target_min
 # --- Funzione Worker per il Multiprocessing ---
 def process_single_file(args_tuple):
     (midi_file_path, base_dir, midi_input_dir, output_dir, 
-     binary_chunks_dir, output_mode, tokenizer_present, transposition_enabled, use_fast_mode) = args_tuple
+     binary_chunks_dir, output_mode, tokenizer_present, 
+     transposition_enabled, use_fast_mode,
+     is_piano_only, should_extract_genre) = args_tuple
     
     global MIDI_TOKENIZER
     if output_mode == "chunked" and not tokenizer_present:
@@ -370,20 +353,16 @@ def process_single_file(args_tuple):
 
     final_metadata = {}
     
-    # === NUOVA LOGICA PER ESTRARRE IL GENERE DAL PERCORSO ===
-    if config.PROCESSING_MODE == "genres":
+    # === LOGICA ESTRAZIONE GENERE ===
+    if should_extract_genre:
         try:
-            # Calcola il percorso relativo dalla cartella 'MIDI' principale
             relative_path_for_genre = midi_file_path.relative_to(midi_input_dir)
-            # Il genere è la prima parte del percorso relativo. Ignora il resto.
             if relative_path_for_genre.parts:
                 genre = relative_path_for_genre.parts[0]
                 final_metadata['genre'] = genre
-                logging.debug(f"Extracted genre '{genre}' for file {midi_file_path.name}")
         except (ValueError, IndexError):
-            # Questo errore può verificarsi se un file si trova direttamente nella root di MIDI_INPUT_DIR
-            logging.warning(f"Could not extract genre from path for {midi_file_path.name}. Is it in a genre subfolder?")
-            final_metadata['genre'] = None # O un valore di default come 'unknown'
+            logging.warning(f"Could not extract genre from path for {midi_file_path.name}.")
+            final_metadata['genre'] = None
     # ========================================================
 
     final_metadata['mido_declared_key_signature'] = mido_check_result.get('key_signature_declared') 
@@ -434,7 +413,7 @@ def process_single_file(args_tuple):
                 score_m21 = converter.parse(str(midi_file_path))
 
                 # La trasposizione si applica solo in modalità piano_only
-                if transposition_enabled and config.PROCESSING_MODE == "piano_only":
+                if transposition_enabled:
                     key_analysis = None # Oggetto che conterrà la tonalità di music21
                     
                     # 1. Recupera la tonalità dichiarata da Mido
@@ -501,7 +480,7 @@ def process_single_file(args_tuple):
                 with suppress_cpp_warnings():
                     score = Score(midi_file_path)
                 
-                if transposition_enabled and config.PROCESSING_MODE == "piano_only":
+                if transposition_enabled:
                     declared_key = mido_check_result.get('key_signature_declared')
                     if declared_key:
                         # La funzione ora restituisce None in caso di fallimento
@@ -520,17 +499,26 @@ def process_single_file(args_tuple):
             
             # --- DA QUI, LA LOGICA È COMUNE A ENTRAMBE LE MODALITÀ ---
             if score is None:
-                # Questo può succedere se un percorso logico fallisce
                 return [{'status': 'skipped_score_not_generated', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
             
-            if config.PROCESSING_MODE == "piano_only":
-                piano_tracks_present = [track for track in score.tracks if track.program in config.PIANO_PROGRAMS]
-                if not piano_tracks_present:
-                    return [{'status': 'skipped_no_piano_tracks', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
-                score.tracks = piano_tracks_present
-                if len(score.tracks) == 0:
-                    return [{'status': 'skipped_no_piano_tracks_after_filter', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
+            if is_piano_only:
+                # Prova prima un filtro stretto basato sui program number
+                filtered_tracks = [track for track in score.tracks if track.program in config.PIANO_PROGRAMS]
 
+                # Se il filtro stretto non trova nulla, applica una logica più permissiva:
+                # in un dataset di pianoforte, assumi che ogni traccia non di percussioni sia pianoforte.
+                if not filtered_tracks:
+                    logging.info(f"File {midi_file_path.name}: Nessuna traccia con program 0-7. Mantengo tutte le tracce non-drum.")
+                    filtered_tracks = [track for track in score.tracks if not track.is_drum]
+
+                # Se anche dopo il filtro permissivo non ci sono tracce, scarta il file.
+                if not filtered_tracks:
+                    return [{'status': 'skipped_no_melodic_tracks_found', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
+                
+                # Applica il filtro allo score
+                score.tracks = filtered_tracks
+
+            # Ora lo score è "pulito" e pronto per la tokenizzazione
             midi_tokens_output = MIDI_TOKENIZER(score)
 
             raw_midi_ids = []
@@ -562,7 +550,11 @@ def process_single_file(args_tuple):
                          return [{'status': 'skipped_first_chunk_too_short', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(chunk_token_ids)}]
                     break
 
-                chunk_id = f"{midi_file_path.stem}_chunk{num_file_chunks}"
+                # Calcola il percorso relativo del file MIDI rispetto alla cartella di input principale
+                relative_path_str = midi_file_path.relative_to(midi_input_dir).as_posix()
+                # Crea un ID sicuro sostituendo i caratteri non validi dal percorso relativo
+                safe_path_id = re.sub(r'[^a-zA-Z0-9_-]', '_', relative_path_str)
+                chunk_id = f"{safe_path_id}_chunk{num_file_chunks}"
                 binary_file_path = binary_chunks_dir / f"{chunk_id}.npy"
                 token_array = np.array(chunk_token_ids, dtype=np.uint16) 
 
@@ -859,11 +851,23 @@ if __name__ == "__main__":
         action="store_true",
         help="Force rebuild of MIDI tokenizer vocabulary even if it exists."
     )
+    # --- NUOVI FLAG PER IL CONTROLLO DELLA LOGICA ---
+    parser.add_argument(
+        "--piano_only",
+        action="store_true",
+        help="Filtra ogni file MIDI per mantenere solo le tracce di pianoforte (programmi 0-7)."
+    )
+    parser.add_argument(
+        "--extract_genre",
+        action="store_true",
+        help="Estrae il genere dalla struttura delle cartelle (es. MIDI/Rock/file.mid -> genere 'Rock')."
+    )
+    # --- ARGOMENTO ESISTENTE AGGIORNATO ---
     parser.add_argument(
         "--transpose_piano_only",
         action="store_true",
-        help=f"Enable automatic transposition to {config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor "
-             f"for 'piano_only' processing mode when in 'chunked' output mode."
+        help=f"Abilita la trasposizione automatica a {config.REFERENCE_KEY_MAJOR}/{config.REFERENCE_KEY_MINOR}. "
+             f"Richiede che sia attivo anche il flag --piano_only."
     )
     parser.add_argument(
         "--fast",
@@ -886,6 +890,10 @@ if __name__ == "__main__":
              "da --delete_skipped_files senza cancellarli effettivamente. Consigliato prima di usare l'opzione di eliminazione."
     )
     args = parser.parse_args()
+    
+    # Assicura che la trasposizione sia usata solo con il filtro per pianoforte.
+    if args.transpose_piano_only and not args.piano_only:
+        parser.error("--transpose_piano_only richiede che sia attivo anche --piano_only.")
 
     # --- DEFINIZIONE DEI PERCORSI GLOBALI BASATA SUGLI ARGOMENTI ---
     paths = config.get_project_paths(args.base_data_dir)
@@ -930,7 +938,7 @@ if __name__ == "__main__":
             exit(1)
             
         # --- IMPOSTA QUI LA PERCENTUALE DESIDERATA ---
-        SAMPLE_PERCENTAGE = 0.02  # Esempio: 2% del dataset
+        SAMPLE_PERCENTAGE = 1.0  # Esempio: 100% del dataset
         
         # Calcola la dimensione del campione
         sample_size = int(total_files * SAMPLE_PERCENTAGE)
@@ -986,7 +994,9 @@ if __name__ == "__main__":
                 args.output_mode, 
                 tokenizer_successfully_initialized, 
                 args.transpose_piano_only,
-                args.fast
+                args.fast,
+                args.piano_only, # Aggiunto
+                args.extract_genre # Aggiunto
             )
             
             # IMPOSTA IL NUMERO DI WORKER DA USARE:
