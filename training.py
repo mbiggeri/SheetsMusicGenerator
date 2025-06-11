@@ -467,6 +467,7 @@ if __name__ == "__main__":
     logging.info("--- Inizio Addestramento ---")
     
     ### MODIFICATO ###
+    epoch = 0
     for epoch in range(start_epoch, EPOCHS + 1):
         logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
         start_time_epoch = time.time()
