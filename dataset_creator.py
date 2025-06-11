@@ -60,16 +60,29 @@ def suppress_cpp_warnings():
 # --- Sopprimi TUTTI gli avvisi di music21 ---
 warnings.filterwarnings('ignore', module='music21')
 
-# --- USAGE ---
-# python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked --force_tokenizer_build
-# --piano_only (filter only piano channels) 
-# --extract_genre (use only genres as a metadata)
-# --transpose_piano_only (transpose piano notes to C major / A minor, use only with --piano_only)
-# --fast (fast control of keys from metadata -without inferring from music21-)
-# --delete_skipped_files (delete all files not included in the final dataset)
-# --dry_run_delete (simulate the deletion without actually deleting files)
+'''
+# --- USAGE ----------------------------------------------
+python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_data --output_mode chunked 
 
-# EXAMPLE: python dataset_creator.py --base_data_dir C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_vG --output_mode chunked --force_tokenizer_build --fast --piano_only --extract_genre
+--force_tokenizer_build (force the reconstruction of the tokenizer, useful if you change the config.py)
+--piano_only (filter only piano channels) 
+--extract_genre (extract genres as a metadata)
+--no-key (Disabilita l'inclusione dei metadati sulla tonalità)
+--no-time-signature (Disabilita l'inclusione del metro)
+--no-tempo (Disabilita l'inclusione del BPM)
+--no-velocity (Disabilita l'inclusione della velocity (media e range))
+--no-instruments (Disabilita l'inclusione dei nomi e del numero di strumenti)
+--transpose_piano_only (transpose piano notes to C major / A minor, use only with --piano_only)
+--fast (fast control of keys from metadata -without inferring from music21-)
+--delete_skipped_files (delete all files not included in the final dataset)
+--dry_run_delete (simulate the deletion without actually deleting files)
+--min_token_freq [int] (only for chunked mode, minimum frequency of tokens to keep in the vocabulary)
+----------------------------------------------------------
+'''
+
+# --- EXAMPLE --------------------------------------------
+# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\The_Magic_of_MIDI" --fast --transpose-to-C --min_token_freq 1500
+# --------------------------------------------------------
 
 # --- Additions for Tokenization and Chunking ---
 import miditok
@@ -147,6 +160,34 @@ KEY_SEMITONE_MAP["Gb"] = KEY_SEMITONE_MAP["F#"]
 KEY_SEMITONE_MAP["Cb"] = KEY_SEMITONE_MAP["B"]
 
 
+# --- FUNZIONE PER IL PRE-FILTRAGGIO ---
+def check_file_validity(args_tuple):
+    """
+    Worker leggero per il pre-filtraggio. Controlla se un file MIDI è valido
+    per l'elaborazione principale senza eseguire la tokenizzazione completa.
+    Ritorna il percorso del file se è valido, altrimenti None.
+    """
+    midi_file_path, transposition_enabled = args_tuple
+    
+    # Controllo di base con mido
+    mido_check_result = quick_midi_check_mido(str(midi_file_path))
+    if not mido_check_result['passed']:
+        return None  # Scarta se non passa i controlli base
+
+    # Controllo specifico per la trasposizione (se abilitata)
+    if transposition_enabled:
+        declared_key = mido_check_result.get('key_signature_declared')
+        if not declared_key:
+            return None # Scarta se la trasposizione è richiesta ma la chiave non c'è
+            
+        # Potremmo anche controllare se la chiave è riconosciuta, ma per ora basta questo
+        if get_transposition_semitones(declared_key, config.REFERENCE_KEY_MAJOR, config.REFERENCE_KEY_MINOR) is None:
+            return None # Scarta se la chiave non è nel nostro map
+
+    # Se tutti i controlli passano, il file è valido
+    return midi_file_path
+
+# --- Funzione per costruire o caricare il tokenizer MIDI ---
 def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, force_build=False):
     """
     Costruisce o carica il tokenizer MIDI utilizzando la configurazione centralizzata
@@ -173,7 +214,7 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
         if midi_file_paths_for_vocab_build:
             logging.info(f"Addestramento del tokenizer con {len(midi_file_paths_for_vocab_build)} file.")
             tokenizer.train(
-                vocab_size=20000, 
+                vocab_size=50000, 
                 model="BPE", 
                 files_paths=midi_file_paths_for_vocab_build
             )
@@ -193,8 +234,6 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
 
     logging.info(f"Tokenizer MIDI pronto. Dimensione vocabolario: {len(tokenizer)}")
     return tokenizer
-
-
 
 # --- Funzioni di Analisi (mido) ---
 def quick_midi_check_mido(file_path_str):
@@ -243,6 +282,15 @@ def quick_midi_check_mido(file_path_str):
 
         if channel_9_active_for_drums:
             found_instruments.add("Drums") 
+        
+        # --- BLOCCO DI CONTROLLO PER STRUMENTO DI DEFAULT ---
+        # Se, dopo aver analizzato tutto, non abbiamo trovato strumenti espliciti
+        # MA il file contiene delle note, assumiamo lo strumento di default
+        # dello standard General MIDI, ovvero l'Acoustic Grand Piano (Program 0).
+        if not found_instruments and note_on_count > 0:
+            logging.debug(f"File {Path(file_path_str).name}: Nessun Program Change trovato, ma sono presenti delle note. Assumo strumento di default (Acoustic Grand Piano).")
+            found_instruments.add("Acoustic Grand Piano")
+        # --- FINE NUOVO BLOCCO ---
 
         bpm_rounded = None
         if tempo_microseconds:
@@ -323,17 +371,25 @@ def get_transposition_semitones(declared_key: str, target_major: str, target_min
 
 # --- Funzione Worker per il Multiprocessing ---
 def process_single_file(args_tuple):
+    # --- MODIFICATO: Aggiunti i nuovi flag per il controllo dei metadati ---
     (midi_file_path, base_dir, midi_input_dir, output_dir, 
      binary_chunks_dir, output_mode, tokenizer_present, 
      transposition_enabled, use_fast_mode,
-     is_piano_only, should_extract_genre) = args_tuple
+     is_piano_only, 
+     # --- NUOVI ARGOMENTI ---
+     should_extract_genre,
+     include_key,
+     include_time_signature,
+     include_tempo,
+     include_velocity,
+     include_instruments
+     ) = args_tuple
     
     global MIDI_TOKENIZER
     if output_mode == "chunked" and not tokenizer_present:
         logging.error(f"Tokenizer requested for chunking {midi_file_path.name} but not available in worker.")
         return [{'status': 'skipped_tokenizer_unavailable', 'filename': midi_file_path.name}]
 
-    # Esegui il controllo mido per i metadati generali e il filtro iniziale
     mido_check_result = quick_midi_check_mido(str(midi_file_path))
 
     if not mido_check_result['passed']:
@@ -342,9 +398,6 @@ def process_single_file(args_tuple):
                 'skipped_path': str(midi_file_path),
                 'detail': mido_check_result.get('detail', '')}]
 
-    # >>> NUOVA MODIFICA: Filtro preventivo sul numero di strumenti <<<
-    # Questo può evitare di chiamare music21 su file che probabilmente lo faranno crashare.
-    # 16 è un numero sicuro (15 canali + 1 per la batteria).
     if len(mido_check_result.get('midi_instruments', [])) > 16:
         return [{'status': 'skipped_too_many_instruments',
                  'filename': midi_file_path.name,
@@ -353,7 +406,18 @@ def process_single_file(args_tuple):
 
     final_metadata = {}
     
-    # === LOGICA ESTRAZIONE GENERE ===
+        # --- MODIFICATO: Creazione del dizionario dei metadati in base ai flag ---
+    final_metadata = {}
+    
+    # Titolo e path sono sempre inclusi come riferimento
+    final_metadata['title'] = midi_file_path.stem
+    try:
+        relative_path = str(midi_file_path.relative_to(base_dir))
+    except ValueError:
+        relative_path = str(midi_file_path.relative_to(midi_input_dir))
+    final_metadata['midi_relative_path'] = relative_path
+    
+    # 1. Genere
     if should_extract_genre:
         try:
             relative_path_for_genre = midi_file_path.relative_to(midi_input_dir)
@@ -363,19 +427,29 @@ def process_single_file(args_tuple):
         except (ValueError, IndexError):
             logging.warning(f"Could not extract genre from path for {midi_file_path.name}.")
             final_metadata['genre'] = None
-    # ========================================================
+            
+    # 2. Tonalità (Key)
+    if include_key:
+        # La logica di trasposizione aggiungerà da sola i metadati relativi alla chiave
+        # Qui ci assicuriamo che la chiave dichiarata da mido sia presente se la trasposizione non è attiva
+        final_metadata['mido_declared_key_signature'] = mido_check_result.get('key_signature_declared')
 
-    final_metadata['mido_declared_key_signature'] = mido_check_result.get('key_signature_declared') 
-    final_metadata['time_signature'] = mido_check_result.get('time_signature')
-    final_metadata['title'] = midi_file_path.stem
-    final_metadata['mido_duration_seconds'] = mido_check_result.get('duration_seconds')
-    final_metadata['mido_note_count'] = mido_check_result.get('note_count')
-    final_metadata['midi_instruments'] = mido_check_result.get('midi_instruments', [])
-    final_metadata['bpm_rounded'] = mido_check_result.get('bpm_rounded')
-    final_metadata['avg_velocity_rounded'] = mido_check_result.get('avg_velocity_rounded')
-    final_metadata['velocity_range_rounded'] = mido_check_result.get('velocity_range_rounded')
-    final_metadata['sustain_pedal_used'] = mido_check_result.get('sustain_pedal_used', False)
-    final_metadata['pitch_bend_used'] = mido_check_result.get('pitch_bend_used', False)
+    # 3. Metro (Time Signature)
+    if include_time_signature:
+        final_metadata['time_signature'] = mido_check_result.get('time_signature')
+
+    # 4. Tempo (BPM)
+    if include_tempo:
+        final_metadata['bpm_rounded'] = mido_check_result.get('bpm_rounded')
+
+    # 5. Velocity
+    if include_velocity:
+        final_metadata['avg_velocity_rounded'] = mido_check_result.get('avg_velocity_rounded')
+        final_metadata['velocity_range_rounded'] = mido_check_result.get('velocity_range_rounded')
+    
+    # 6. Strumenti
+    if include_instruments:
+        final_metadata['midi_instruments'] = mido_check_result.get('midi_instruments', [])
 
     missing_essentials = [k for k in ESSENTIAL_METADATA if final_metadata.get(k) is None]
     if missing_essentials:
@@ -482,20 +556,26 @@ def process_single_file(args_tuple):
                 
                 if transposition_enabled:
                     declared_key = mido_check_result.get('key_signature_declared')
+                    transposition_semitones = None # Inizializza
+                    
                     if declared_key:
-                        # La funzione ora restituisce None in caso di fallimento
                         transposition_semitones = get_transposition_semitones(declared_key, config.REFERENCE_KEY_MAJOR, config.REFERENCE_KEY_MINOR)
-                        
-                        # Controlla se la tonalità è stata identificata con successo
-                        if transposition_semitones is not None:
-                            # Esegui la trasposizione solo se necessario
-                            if transposition_semitones != 0:
-                                score = transpose_score(score, transposition_semitones)
+                    
+                    # Se la trasposizione è abilitata, ma non siamo riusciti a determinare
+                    # di quanto trasporre (perché la chiave non era dichiarata o non era valida),
+                    # scartiamo il file per garantire la coerenza del dataset.
+                    if transposition_semitones is None:
+                        return [{'status': 'skipped_transposition_key_not_found',
+                                'filename': midi_file_path.name,
+                                'skipped_path': str(midi_file_path)}]
+                    
+                    if transposition_semitones != 0:
+                        score = transpose_score(score, transposition_semitones)
                             
-                            # IMPOSTA SEMPRE I METADATI se la tonalità è stata riconosciuta, anche se l'offset è 0
-                            final_metadata['transposed_to_key'] = f"{config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor"
-                            final_metadata['original_key_mido'] = declared_key
-                            final_metadata['transposition_semitones'] = transposition_semitones
+                        # IMPOSTA SEMPRE I METADATI se la tonalità è stata riconosciuta, anche se l'offset è 0
+                    final_metadata['transposed_to_key'] = f"{config.REFERENCE_KEY_MAJOR} major / {config.REFERENCE_KEY_MINOR} minor"
+                    final_metadata['original_key_mido'] = declared_key
+                    final_metadata['transposition_semitones'] = transposition_semitones
             
             # --- DA QUI, LA LOGICA È COMUNE A ENTRAMBE LE MODALITÀ ---
             if score is None:
@@ -698,7 +778,7 @@ def determine_optimal_workers(all_midi_paths, processing_args_template, safety_f
 
 # --- Funzioni per la creazione dei vocabolari dei metadati ---
 
-def build_metadata_vocabs_and_frequencies(all_metadata_examples):
+def build_metadata_vocabs_and_frequencies(all_metadata_examples, min_freq=1):
     """
     Crea i vocabolari dei metadati e calcola la frequenza di ogni token.
     Non scrive file, ma ritorna le strutture dati.
@@ -713,6 +793,16 @@ def build_metadata_vocabs_and_frequencies(all_metadata_examples):
         if tokens:
             metadata_tokens.update(tokens)
             frequency_counter.update(tokens)
+            
+    # --- FASE DI FILTRAGGIO ---
+    logging.info(f"Conteggio iniziale: {len(frequency_counter)} token unici.")
+    
+    # Crea un set di token che soddisfano la soglia di frequenza
+    frequent_metadata_tokens = {
+        token for token, count in frequency_counter.items() if count >= min_freq
+    }
+    logging.info(f"Dopo il filtraggio (soglia >= {min_freq}): {len(frequent_metadata_tokens)} token unici rimasti.")
+    # --- FINE FILTRAGGIO ---
 
     # Crea il vocabolario token -> id
     special_tokens = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]
@@ -832,47 +922,65 @@ def build_or_load_metadata_vocab(all_metadata_examples, METADATA_VOCAB_PATH, for
 # --- Main Script Execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Create MIDI dataset splits.")
-    # --- Argomenti per la directory base e per le opzioni di output ---
+    # ... (Argomenti --base_data_dir, --output_mode, --force_tokenizer_build rimangono invariati) ...
     parser.add_argument(
-        "--base_data_dir",
-        type=Path,
-        required=True,
+        "--base_data_dir", type=Path, required=True,
         help="Path to the base data directory, which should contain the 'MIDI' subdirectory."
     )
     parser.add_argument(
-        "--output_mode",
-        type=str,
-        choices=["classic", "chunked"],
-        default="chunked",
-        help="Output mode: 'classic' (one entry per file) or 'chunked' (one entry per MIDI chunk)."
+        "--output_mode", type=str, choices=["classic", "chunked"], default="chunked",
+        help="Output mode."
     )
     parser.add_argument(
-        "--force_tokenizer_build",
-        action="store_true",
-        help="Force rebuild of MIDI tokenizer vocabulary even if it exists."
+        "--force_tokenizer_build", action="store_true",
+        help="Force rebuild of MIDI tokenizer vocabulary."
     )
-    # --- NUOVI FLAG PER IL CONTROLLO DELLA LOGICA ---
+    
+    # --- GRUPPO DI ARGOMENTI PER CONTROLLO DEI METADATI ---
+    metadata_group = parser.add_argument_group('Metadata Inclusion Controls')
+    metadata_group.add_argument(
+        "--extract_genre", action="store_true",
+        help="Estrae il genere dalla struttura delle cartelle."
+    )
+    metadata_group.add_argument(
+        "--no-key", dest='include_key', action='store_false',
+        help="NON includere i metadati relativi alla tonalità."
+    )
+    metadata_group.add_argument(
+        "--no-time-signature", dest='include_time_signature', action='store_false',
+        help="NON includere i metadati relativi al metro (time signature)."
+    )
+    metadata_group.add_argument(
+        "--no-tempo", dest='include_tempo', action='store_false',
+        help="NON includere i metadati relativi al tempo (BPM)."
+    )
+    metadata_group.add_argument(
+        "--no-velocity", dest='include_velocity', action='store_false',
+        help="NON includere i metadati relativi alla velocity."
+    )
+    metadata_group.add_argument(
+        "--no-instruments", dest='include_instruments', action='store_false',
+        help="NON includere i metadati relativi agli strumenti (nomi e numero)."
+    )
+    parser.set_defaults(
+        include_key=True, include_time_signature=True, include_tempo=True, 
+        include_velocity=True, include_instruments=True
+    )
+    
+    # --- ALTRI ARGOMENTI (piano, transpose, ecc.) ---
     parser.add_argument(
-        "--piano_only",
-        action="store_true",
+        "--piano_only", action="store_true",
         help="Filtra ogni file MIDI per mantenere solo le tracce di pianoforte (programmi 0-7)."
     )
     parser.add_argument(
-        "--extract_genre",
-        action="store_true",
-        help="Estrae il genere dalla struttura delle cartelle (es. MIDI/Rock/file.mid -> genere 'Rock')."
-    )
-    # --- ARGOMENTO ESISTENTE AGGIORNATO ---
-    parser.add_argument(
-        "--transpose_piano_only",
-        action="store_true",
-        help=f"Abilita la trasposizione automatica a {config.REFERENCE_KEY_MAJOR}/{config.REFERENCE_KEY_MINOR}. "
-             f"Richiede che sia attivo anche il flag --piano_only."
+    "--transpose-to-C",
+    dest='transpose_enabled', # L'argomento imposterà la variabile 'transpose_enabled'
+    action="store_true",
+    help="Abilita la trasposizione di tutti i brani a Do Maggiore / La minore per normalizzare la tonalità."
     )
     parser.add_argument(
-        "--fast",
-        action="store_true", # Questo rende --fast un flag booleano
-        help="Use fast processing mode, skipping music21 analysis and using mido-declared keys for transposition."
+        "--fast", action="store_true",
+        help="Use fast processing mode."
     )
     destructive_group = parser.add_argument_group(
         'Operazioni Distruttive (Usare con Cautela!)'
@@ -889,11 +997,13 @@ if __name__ == "__main__":
         help="Esegue una simulazione (dry run) dell'eliminazione. Mostra quali file verrebbero eliminati "
              "da --delete_skipped_files senza cancellarli effettivamente. Consigliato prima di usare l'opzione di eliminazione."
     )
+    metadata_group.add_argument(
+        "--min_token_freq",
+        type=int,
+        default=10,
+        help="Soglia minima di occorrenze per includere un token di metadati nel vocabolario finale. Default: 10"
+    )
     args = parser.parse_args()
-    
-    # Assicura che la trasposizione sia usata solo con il filtro per pianoforte.
-    if args.transpose_piano_only and not args.piano_only:
-        parser.error("--transpose_piano_only richiede che sia attivo anche --piano_only.")
 
     # --- DEFINIZIONE DEI PERCORSI GLOBALI BASATA SUGLI ARGOMENTI ---
     paths = config.get_project_paths(args.base_data_dir)
@@ -924,155 +1034,163 @@ if __name__ == "__main__":
 
     logging.info(f"--- Dataset Creation Script --- Base Directory: {BASE_DATA_DIR} ---")
     logging.info(f"Output Mode: {args.output_mode}")
-    logging.info(f"Transposition Enabled: {args.transpose_piano_only and config.PROCESSING_MODE == 'piano_only'}")
+    logging.info(f"Transposition Enabled: {args.transpose_enabled}")
 
     temp_midi_files_for_vocab = []
-    # --- Nuovo Blocco con Campionamento Proporzionale ---
+    
+    # --- TROVA TUTTI I FILE MIDI POTENZIALI ---
+    logging.info("Ricerca di tutti i file MIDI potenziali...")
+    all_potential_midi_files = list(MIDI_INPUT_DIR.rglob("*.mid")) + list(MIDI_INPUT_DIR.rglob("*.midi"))
+    logging.info(f"Trovati {len(all_potential_midi_files)} file MIDI potenziali in {MIDI_INPUT_DIR}.")
+
+    if not all_potential_midi_files:
+        logging.error("Nessun file MIDI trovato. Uscita.")
+        exit(1)
+
+    # --- FASE 0: PRE-FILTRAGGIO DEI FILE MIDI ---
+    logging.info("--- Fase 0: Pre-filtraggio dei file per garantire la validità ---")
+    
+    valid_midi_files_for_processing = []
+    pre_filter_tasks = [(path, args.transpose_enabled) for path in all_potential_midi_files]
+    num_workers_prefilter = max(1, os.cpu_count() - 1)
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers_prefilter) as executor:
+        results_iterator = executor.map(check_file_validity, pre_filter_tasks)
+        
+        progress_bar = tqdm(results_iterator, total=len(all_potential_midi_files), desc="Pre-filtraggio file", unit="file")
+        
+        for result_path in progress_bar:
+            if result_path is not None:
+                valid_midi_files_for_processing.append(result_path)
+
+    logging.info(f"Pre-filtraggio completato. {len(valid_midi_files_for_processing)} su {len(all_potential_midi_files)} file sono risultati validi per l'elaborazione.")
+
+    if not valid_midi_files_for_processing:
+        logging.error("Nessun file MIDI valido trovato dopo il pre-filtraggio. Uscita.")
+        exit(1)
+
+    # --- FASE 0.5: COSTRUZIONE VOCABOLARIO TOKENIZER MIDI (ORA SUI FILE VALIDI) ---
+    temp_midi_files_for_vocab = []
     if not VOCAB_PATH.exists() or args.force_tokenizer_build:
-        logging.info("Collecting MIDI files to build tokenizer vocabulary...")
-        all_potential_midi_files = list(MIDI_INPUT_DIR.rglob("*.mid")) + list(MIDI_INPUT_DIR.rglob("*.midi"))
-        total_files = len(all_potential_midi_files)
+        logging.info("Preparazione campione per vocabolario tokenizer MIDI dai file validi...")
+        
+        # Usa la logica di campionamento che abbiamo già definito, ma sulla lista filtrata
+        SAMPLE_PERCENTAGE = 0.20 
+        MAX_SAMPLE_SIZE = 50000
+        total_valid_files = len(valid_midi_files_for_processing)
+        sample_size = min(int(total_valid_files * SAMPLE_PERCENTAGE), MAX_SAMPLE_SIZE, total_valid_files)
+        sample_size = max(50, sample_size)
 
-        if total_files == 0:
-            logging.error("No MIDI files found to build tokenizer vocabulary. Exiting.")
-            exit(1)
-            
-        # --- IMPOSTA QUI LA PERCENTUALE DESIDERATA ---
-        SAMPLE_PERCENTAGE = 1.0  # Esempio: 100% del dataset
+        logging.info(f"Verrà usato un campione casuale di {sample_size} file validi per il vocabolario.")
         
-        # Calcola la dimensione del campione
-        sample_size = int(total_files * SAMPLE_PERCENTAGE)
-        
-        # Imposta un limite minimo (es. 50 file) e assicurati di non superare il totale
-        sample_size = max(50, min(sample_size, total_files))
-
-        logging.info(f"Trovati {total_files} file MIDI. Campionamento del {SAMPLE_PERCENTAGE*100:.2f}% per il vocabolario: {sample_size} file.")
-        
-        temp_midi_files_for_vocab = [str(p) for p in random.sample(all_potential_midi_files, sample_size)]
+        sampled_paths = random.sample(valid_midi_files_for_processing, sample_size)
+        temp_midi_files_for_vocab = [str(p) for p in sampled_paths]
 
     try:
         MIDI_TOKENIZER = build_or_load_tokenizer_for_creator(
-            midi_file_paths_for_vocab_build=temp_midi_files_for_vocab if temp_midi_files_for_vocab else None,
+            midi_file_paths_for_vocab_build=temp_midi_files_for_vocab,
             force_build=args.force_tokenizer_build
         )
         tokenizer_successfully_initialized = MIDI_TOKENIZER is not None
     except Exception as e:
-        logging.error(f"Failed to initialize MIDI_TOKENIZER in main process: {e}", exc_info=True)
-        MIDI_TOKENIZER = None
+        logging.error(f"Impossibile inizializzare MIDI_TOKENIZER: {e}", exc_info=True)
         tokenizer_successfully_initialized = False
 
-
     if args.output_mode == "chunked" and not tokenizer_successfully_initialized:
-        logging.error("Chunked mode selected, but MIDI tokenizer could not be initialized. Exiting.")
+        logging.error("Modalità Chunked selezionata, ma il tokenizer MIDI non è stato inizializzato. Uscita.")
         exit(1)
 
-    logging.info(f"--- Fase 1: Elaborazione File MIDI da {MIDI_INPUT_DIR} ---")
+    # --- FASE 1: ELABORAZIONE PRINCIPALE SUI FILE VALIDI ---
+    logging.info(f"--- Fase 1: Elaborazione principale di {len(valid_midi_files_for_processing)} file MIDI validi ---")
     all_processed_entries = []
-    total_files_found = 0
+    
+    # La lista midi_file_paths ora contiene solo i file validi
+    midi_file_paths = valid_midi_files_for_processing
+    total_files_to_process = len(midi_file_paths)
 
-    if not MIDI_INPUT_DIR.exists() or not MIDI_INPUT_DIR.is_dir():
-        logging.error(f"Directory MIDI di input non trovata o non valida: {MIDI_INPUT_DIR}")
-    else:
-        midi_file_paths = [p for p in MIDI_INPUT_DIR.rglob("*.mid")] + \
-                          [p for p in MIDI_INPUT_DIR.rglob("*.midi")]
+    num_success = 0
+    failure_summary = {}
+
+    task_args_template = (
+        Path, # Placeholder per il percorso
+        BASE_DATA_DIR, 
+        MIDI_INPUT_DIR, 
+        OUTPUT_DIR, 
+        BINARY_CHUNKS_DIR, 
+        args.output_mode, 
+        tokenizer_successfully_initialized, 
+        args.transpose_enabled,  # Usa il nome corretto dell'argomento
+        args.fast,
+        args.piano_only,
+        args.extract_genre,
+        args.include_key,
+        args.include_time_signature,
+        args.include_tempo,
+        args.include_velocity,
+        args.include_instruments
+    )
+    
+    # Usa la funzione di auto-calibrazione sui file validi per la massima stabilità
+    num_workers = determine_optimal_workers(midi_file_paths, task_args_template)
+    
+    # Crea i task completi per l'elaborazione finale
+    tasks = [(path,) + task_args_template[1:] for path in midi_file_paths]
+    
+    logging.info(f"Utilizzo di {num_workers} processi worker per l'elaborazione principale.")
+    
+    # (Il blocco per --delete_skipped_files rimane qui)
+    if args.delete_skipped_files:
+        # ... (stampa avviso)
+        time.sleep(10)
+    
+    skipped_file_paths_to_delete = set()
+    successful_file_paths = set()
+
+    # Esegui l'elaborazione principale
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=num_workers, 
+        initializer=init_worker if args.output_mode == "chunked" else None, 
+        initargs=(VOCAB_PATH, config.MIDI_TOKENIZER_STRATEGY) if args.output_mode == "chunked" else ()
+    ) as executor:
         
-        total_files_found = len(midi_file_paths)
-        logging.info(f"Trovati {total_files_found} file MIDI in {MIDI_INPUT_DIR} da elaborare.")
-
-        if not midi_file_paths:
-            logging.warning("Nessun file MIDI trovato.")
-        else:
-            num_success = 0
-            failure_summary = {}
-
-            task_args_template = (
-                Path,
-                BASE_DATA_DIR, 
-                MIDI_INPUT_DIR, 
-                OUTPUT_DIR, 
-                BINARY_CHUNKS_DIR, 
-                args.output_mode, 
-                tokenizer_successfully_initialized, 
-                args.transpose_piano_only,
-                args.fast,
-                args.piano_only, # Aggiunto
-                args.extract_genre # Aggiunto
-            )
-            
-            # IMPOSTA IL NUMERO DI WORKER DA USARE:
-            # --- Per selezionare il numero massimo di worker da usare ---
-            num_workers = max(1, os.cpu_count() - 1 if os.cpu_count() else 1)
-            
-            # --- Per determinare il numero di worker da usare in modo automatico ---
-            # num_workers = determine_optimal_workers(midi_file_paths, task_args_template)
-            
-            # --- Per impostare manualmente il numero di worker ---
-            # num_workers = 8
-            
-            # Crea i task completi per l'elaborazione finale
-            tasks = [(path,) + task_args_template[1:] for path in midi_file_paths]
-            
-            logging.info(f"Utilizzo di {num_workers} processi worker per l'elaborazione principale.")
-            
-            if args.delete_skipped_files:
-                print("\n" + "="*80)
-                print("ATTENZIONE: MODALITÀ DISTRUTTIVA ATTIVATA (--delete_skipped_files).")
-                print("I file MIDI sorgente che vengono scartati verranno ELIMINATI PERMANENTEMENTE.")
-                print("Si consiglia di eseguire prima un --dry_run_delete.")
-                print("Processo in avvio tra 10 secondi...")
-                print("="*80 + "\n")
-                time.sleep(10)
-            
-            skipped_file_paths_to_delete = set()
-            successful_file_paths = set()
-
-            with concurrent.futures.ProcessPoolExecutor(
-                max_workers=num_workers, 
-                initializer=init_worker if args.output_mode == "chunked" else None, 
-                initargs=(VOCAB_PATH, config.MIDI_TOKENIZER_STRATEGY) if args.output_mode == "chunked" else ()
-            ) as executor:
+        results_iterator = executor.map(process_single_file, tasks)
+        
+        progress_bar = tqdm(results_iterator, total=total_files_to_process, desc=f"Analisi MIDI ({args.output_mode})", unit="file")
+        
+        current_file_path_iterator = (task[0] for task in tasks)
+        
+        for file_path, file_results_list in zip(current_file_path_iterator, progress_bar):
+            # ... (il resto del ciclo for per aggregare i risultati rimane identico a prima)
+            is_successful = False
+            if not file_results_list:
+                failure_summary['unknown_empty_result'] = failure_summary.get('unknown_empty_result', 0) + 1
+                is_successful = False
+            else:
+                if any(res.get('status', '').startswith('success') for res in file_results_list):
+                    is_successful = True
                 
-                results_iterator = executor.map(process_single_file, tasks)
-                
-                progress_bar = tqdm(results_iterator, total=total_files_found, desc=f"Analisi MIDI ({args.output_mode})", unit="file")
-                
-                # Memorizza il percorso del file corrente dal task
-                current_file_path_iterator = (task[0] for task in tasks)
-                
-                for file_path, file_results_list in zip(current_file_path_iterator, progress_bar):
-                    is_successful = False
-                    if not file_results_list:
-                        failure_summary['unknown_empty_result'] = failure_summary.get('unknown_empty_result', 0) + 1
-                        is_successful = False
+                for result_item in file_results_list:
+                    status = result_item.get('status', 'unknown_status')
+                    if status.startswith('success'):
+                        all_processed_entries.append(result_item)
+                        num_success += 1
                     else:
-                        # Un file è considerato di successo se almeno un chunk è stato creato con successo
-                        if any(res.get('status', '').startswith('success') for res in file_results_list):
-                            is_successful = True
-                        
-                        for result_item in file_results_list:
-                            status = result_item.get('status', 'unknown_status')
-                            if status.startswith('success'):
-                                all_processed_entries.append(result_item)
-                                num_success +=1
-                            else:
-                                failure_summary[status] = failure_summary.get(status, 0) + 1
-                    
-                    # Aggiungi il percorso alla lista corretta
-                    if is_successful:
-                        successful_file_paths.add(str(file_path))
-                    else:
-                        skipped_file_paths_to_delete.add(str(file_path))
-
-                    if args.output_mode == "classic" or num_success % 100 == 0 :
-                        progress_bar.set_postfix_str(f"Valid items: {num_success}, Failures: {sum(failure_summary.values())}")
+                        failure_summary[status] = failure_summary.get(status, 0) + 1
             
-            logging.info(f"Conteggio finale voci valide (chunks/files): {num_success}")
-            if failure_summary:
-                logging.info("Dettaglio fallimenti/skip:")
-                for reason, count in sorted(failure_summary.items()):
-                    logging.info(f"  '{reason}': {count}")
+            if is_successful:
+                successful_file_paths.add(str(file_path))
+            else:
+                skipped_file_paths_to_delete.add(str(file_path))
 
-    if total_files_found > 0:
+            progress_bar.set_postfix_str(f"Valid items: {num_success}, Failures: {sum(failure_summary.values())}")
+    
+    logging.info(f"Conteggio finale voci valide (chunks/files): {num_success}")
+    if failure_summary:
+        logging.info("Dettaglio fallimenti/skip (durante l'elaborazione principale):")
+        for reason, count in sorted(failure_summary.items()):
+            logging.info(f"  '{reason}': {count}")
+
+    if total_files_to_process > 0:
         logging.info(f"Numero totale di entry JSONL prodotte: {len(all_processed_entries)}")
     else:
         logging.info("Nessun file MIDI trovato o processato.")
@@ -1095,7 +1213,10 @@ if __name__ == "__main__":
         ]
 
         # Costruisci i vocabolari e calcola le frequenze in memoria
-        token_to_id, frequency_counter = build_metadata_vocabs_and_frequencies(all_metadata_dicts)
+        token_to_id, frequency_counter = build_metadata_vocabs_and_frequencies(
+            all_metadata_dicts, 
+            min_freq=args.min_token_freq
+        )
 
         # Salva il vocabolario standard
         save_metadata_vocab(token_to_id, METADATA_VOCAB_PATH)
