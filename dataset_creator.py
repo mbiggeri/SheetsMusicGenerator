@@ -24,6 +24,7 @@ import psutil   # for auto-calibrating best number of workers
 import collections
 from tokenize_metadata import tokenize_metadata
 import config
+import hashlib
 
 @contextmanager
 def suppress_cpp_warnings():
@@ -632,8 +633,16 @@ def process_single_file(args_tuple):
 
                 # Calcola il percorso relativo del file MIDI rispetto alla cartella di input principale
                 relative_path_str = midi_file_path.relative_to(midi_input_dir).as_posix()
-                # Crea un ID sicuro sostituendo i caratteri non validi dal percorso relativo
-                safe_path_id = re.sub(r'[^a-zA-Z0-9_-]', '_', relative_path_str)
+                
+                # --- VECCHIA LOGICA DA SOSTITUIRE ---
+                # safe_path_id = re.sub(r'[^a-zA-Z0-9_-]', '_', relative_path_str)
+                
+                # --- NUOVA LOGICA ROBUSTA ---
+                # Crea un hash del percorso relativo originale per garantire un ID unico.
+                path_hash = hashlib.sha1(relative_path_str.encode('utf-8')).hexdigest()
+                
+                # Combina lo stem originale (per leggibilità) con l'hash (per unicità)
+                safe_path_id = f"{midi_file_path.stem}_{path_hash}"
                 chunk_id = f"{safe_path_id}_chunk{num_file_chunks}"
                 binary_file_path = binary_chunks_dir / f"{chunk_id}.npy"
                 token_array = np.array(chunk_token_ids, dtype=np.uint16) 
