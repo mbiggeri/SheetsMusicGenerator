@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
-from torch.optim.lr_scheduler import ReduceLROnPlateau # <-- 1. IMPORTATO LO SCHEDULER
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import miditok
 from pathlib import Path
 import json
@@ -26,6 +26,9 @@ import config
 
 # --- USAGE: ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS
+#
+# --- TO RESUME TRAINING: ---
+# python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS --resume_from_checkpoint PATH/TO/transformer_best.pt
 
 # --- Configurazione del logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -69,16 +72,13 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
              return build_or_load_tokenizer(midi_file_paths=midi_file_paths, force_build=True)
     else:
         logging.info("Creazione nuova configurazione tokenizer MIDI utilizzando config.py...")
-        # --- 2. MODIFICA CHIAVE: Utilizza direttamente TOKENIZER_PARAMS da config.py ---
-        # Questo assicura che le impostazioni (es. REMI+) siano identiche a quelle usate
-        # per creare il dataset.
         tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=config.TOKENIZER_PARAMS)
         logging.info(f"Tokenizer {config.MIDI_TOKENIZER_STRATEGY.__name__} inizializzato con i parametri da config.py.")
 
         if midi_file_paths and hasattr(tokenizer, 'train'):
             logging.info(f"Addestramento del tokenizer (es. BPE) con {len(midi_file_paths)} file.")
             tokenizer.train(
-                vocab_size=20000, # Questo è per BPE, non influisce su TSD/REMI base
+                vocab_size=20000,
                 model="BPE",
                 files_paths=midi_file_paths
             )
@@ -90,7 +90,6 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
 
     logging.info(f"Dimensione vocabolario MIDI (dopo caricamento/costruzione): {len(tokenizer)}")
 
-    # Verifica dei token speciali
     try:
         assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
         assert tokenizer[config.MIDI_SOS_TOKEN_NAME] is not None
@@ -114,7 +113,6 @@ def load_metadata_vocab(vocab_path):
     
     token_to_id = vocab_data['token_to_id']
     
-    # Verifica che i token speciali necessari esistano
     required_specials = [config.META_PAD_TOKEN_NAME, config.META_UNK_TOKEN_NAME, config.META_SOS_TOKEN_NAME, config.META_EOS_TOKEN_NAME]
     missing = [t for t in required_specials if t not in token_to_id]
     if missing:
@@ -162,13 +160,11 @@ class MutopiaDataset(Dataset):
                 try:
                     entry = json.loads(line)
                     
-                    # Prepara la sequenza dei metadati (src)
                     meta_tokens_str = tokenize_metadata(entry.get('metadata', {}))
                     meta_token_ids = [self.metadata_vocab_map.get(token, self.unk_meta_id) for token in meta_tokens_str]
                     src_seq_list = [self.sos_meta_id] + meta_token_ids[:self.max_len_meta-2] + [self.eos_meta_id]
                     src_tensor = torch.tensor(src_seq_list, dtype=torch.long)
 
-                    # Recupera il PERCORSO del file dei token
                     token_ids_relative_path = entry.get('token_ids_path')
                     if token_ids_relative_path:
                         self.samples.append((src_tensor, token_ids_relative_path))
@@ -351,6 +347,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Addestra un modello Transformer per la generazione musicale.")
     parser.add_argument("--data_dir", type=Path, required=True, help="Percorso della cartella base del dataset.")
     parser.add_argument("--model_save_dir", type=Path, required=True, help="Percorso per salvare i checkpoint del modello.")
+    ### NUOVO ###
+    parser.add_argument("--resume_from_checkpoint", type=Path, default=None, help="Percorso opzionale a un checkpoint per riprendere l'addestramento.")
     args = parser.parse_args()
 
     DATA_DIR = args.data_dir
@@ -358,6 +356,17 @@ if __name__ == "__main__":
     SPLITS_DIR = DATA_DIR / "dataset_splits"
     VOCAB_PATH = DATA_DIR / "midi_vocab.json"
     METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json"
+    
+    ### NUOVO ###
+    # Inizializzazione delle variabili per la ripresa
+    checkpoint = None
+    if args.resume_from_checkpoint and args.resume_from_checkpoint.exists():
+        logging.info(f"Trovato checkpoint: {args.resume_from_checkpoint}. Caricamento in corso...")
+        checkpoint = torch.load(args.resume_from_checkpoint, map_location=DEVICE)
+        logging.info("Checkpoint caricato.")
+    elif args.resume_from_checkpoint:
+        logging.warning(f"Checkpoint specificato ma non trovato in: {args.resume_from_checkpoint}. Avvio di un nuovo addestramento.")
+
 
     MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -365,7 +374,7 @@ if __name__ == "__main__":
     logging.info(f"I modelli verranno salvati in: {MODEL_SAVE_DIR}")
     
     logging.info("--- Preparazione Tokenizer e Vocabolari ---")
-    midi_tokenizer = build_or_load_tokenizer(force_build=False) # Non è necessario passare file se il vocab esiste già
+    midi_tokenizer = build_or_load_tokenizer(force_build=False)
     metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
 
     MIDI_VOCAB_SIZE = len(midi_tokenizer)
@@ -403,42 +412,62 @@ if __name__ == "__main__":
                                 persistent_workers=use_persistent_workers)
 
     logging.info("--- Inizializzazione Modello ---")
-    max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100 
-
-    model = Seq2SeqTransformer(
-        NUM_ENCODER_LAYERS, NUM_DECODER_LAYERS, EMB_SIZE, NHEAD,
-        META_VOCAB_SIZE, MIDI_VOCAB_SIZE, 
-        max_pe_len=max_pe_len_calculated, 
-        dim_feedforward=FFN_HID_DIM, dropout=DROPOUT
-    ).to(DEVICE)
+    
+    ### NUOVO / MODIFICATO ###
+    # Se stiamo riprendendo, usiamo i parametri del checkpoint. Altrimenti, usiamo quelli globali.
+    if checkpoint and 'model_params' in checkpoint:
+        logging.info("Inizializzazione del modello con i parametri salvati nel checkpoint.")
+        model_params_to_save = checkpoint['model_params']
+        # Assicurati che tutti i vocabolari siano della dimensione corretta
+        model_params_to_save['src_vocab_size'] = META_VOCAB_SIZE
+        model_params_to_save['tgt_vocab_size'] = MIDI_VOCAB_SIZE
+    else:
+        logging.info("Inizializzazione di un nuovo modello con i parametri di default.")
+        max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100 
+        model_params_to_save = {
+            'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
+            'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE,
+            'tgt_vocab_size': MIDI_VOCAB_SIZE, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
+            'max_pe_len': max_pe_len_calculated
+        }
+        
+    model = Seq2SeqTransformer(**model_params_to_save).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
-    
-    # --- 1. INIZIALIZZAZIONE DELLO SCHEDULER ---
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1)
+
+    ### NUOVO ###
+    # Variabili per gestire lo stato dell'addestramento
+    start_epoch = 1
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+    patience_early_stopping = 10 
+
+    if checkpoint:
+        logging.info("Ripristino dello stato del modello e dell'ottimizzatore.")
+        model.load_state_dict(checkpoint['model_state_dict'])
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Le altre variabili di stato vengono ripristinate per continuare correttamente
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        logging.info(f"Ripresa dall'epoca {start_epoch} con best_val_loss = {best_val_loss:.4f}")
+
     logging.info("Learning rate scheduler 'ReduceLROnPlateau' attivato con pazienza=3.")
-    
     logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     logging.info(f"Device: {DEVICE}")
     
-    model_params_to_save = {
-        'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
-        'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE,
-        'tgt_vocab_size': MIDI_VOCAB_SIZE, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
-        'max_pe_len': max_pe_len_calculated
-    }
     vocab_info_to_save = {
         'midi_vocab_path': str(VOCAB_PATH), 'metadata_vocab_path': str(METADATA_VOCAB_PATH),
         'midi_tokenizer_strategy': config.MIDI_TOKENIZER_STRATEGY.__name__
     }
 
     logging.info("--- Inizio Addestramento ---")
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-    patience_early_stopping = 10 
-
-    for epoch in range(1, EPOCHS + 1):
+    
+    ### MODIFICATO ###
+    for epoch in range(start_epoch, EPOCHS + 1):
         logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
         start_time_epoch = time.time()
         train_loss_epoch = train_epoch(model, optimizer, criterion, train_dataloader)
@@ -450,9 +479,8 @@ if __name__ == "__main__":
         epoch_duration_total = time.time() - start_time_epoch
         logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {current_val_loss:.4f} (Durata: {epoch_duration_total:.2f}s)")
 
-        # --- 1. STEP DELLO SCHEDULER ---
         if val_dataloader:
-            scheduler.step(current_val_loss) # Passa la validation loss allo scheduler
+            scheduler.step(current_val_loss)
 
         if val_dataloader and current_val_loss < best_val_loss:
             best_val_loss = current_val_loss
