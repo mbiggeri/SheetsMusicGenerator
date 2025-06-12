@@ -595,7 +595,7 @@ if __name__ == "__main__":
         
         # Ora avvia i processi
         print("Avvio di xmp.spawn...")
-        xmp.spawn(main_training_loop, args=(args,), start_method='fork')
+        xmp.spawn(main_training_loop, args=(args,), start_method='spawn')
         print("xmp.spawn completato.")
     else:
         # Se non è una TPU, esegui la funzione normally in un singolo processo
