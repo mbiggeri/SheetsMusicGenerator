@@ -36,7 +36,6 @@ import config
 try:
     import torch_xla.core.xla_model as xm # type: ignore
     import torch_xla.distributed.parallel_loader as pl # type: ignore
-    import torch_xla.distributed.xla_multiprocessing as xmp # type: ignore
     IS_TPU = True
 except ImportError:
     IS_TPU = False
@@ -588,12 +587,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if IS_TPU:
-        # QUESTA È LA PARTE CRITICA
-        # Imposta la variabile d'ambiente PRIMA di qualsiasi altra cosa di xla
+        # Import xmp here, only when needed
+        import torch_xla.distributed.xla_multiprocessing as xmp # type: ignore  <-- ADD THIS LINE
+
         print("TPU rilevata. Configurazione dell'ambiente PJRT in corso...")
         os.environ['PJRT_DEVICE'] = 'TPU'
         
-        # Ora avvia i processi
         print("Avvio di xmp.spawn...")
         xmp.spawn(main_training_loop, args=(args,), start_method='spawn')
         print("xmp.spawn completato.")
