@@ -429,7 +429,7 @@ def main_training_loop(args):
     model = Seq2SeqTransformer(**model_params_to_save).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1)
 
     start_epoch = 1
     best_val_loss = float('inf')
