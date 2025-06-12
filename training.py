@@ -359,17 +359,89 @@ def evaluate(model, criterion, dataloader):
 # ------------------------
 # Learning Rate Finder
 # ------------------------
-def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_save_dir):
+class _LRFModelWrapper(torch.nn.Module):
+    """Wraps the model to be compatible with LRFinder's model(inputs) call."""
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, inputs_dict):
+        # Unpack the dictionary and call the real model with the correct arguments.
+        return self.model(
+            src=inputs_dict["src"],
+            tgt=inputs_dict["tgt"],
+            src_padding_mask=inputs_dict["src_padding_mask"],
+            tgt_padding_mask=inputs_dict["tgt_padding_mask"],
+            memory_key_padding_mask=inputs_dict["src_padding_mask"]
+        )
+
+class _LRFCriterionWrapper(torch.nn.Module):
+    """Wraps the criterion to be compatible with LRFinder's criterion(output, labels) call."""
+    def __init__(self, criterion):
+        super().__init__()
+        self.criterion = criterion
+
+    def forward(self, model_output, labels):
+        # model_output is 'logits', labels is 'tgt_out'.
+        # Reshape them as expected by the original criterion.
+        return self.criterion(model_output.reshape(-1, model_output.shape[-1]), labels.reshape(-1))
+
+def _lr_finder_collate_fn(batch, meta_pad_id, midi_pad_id, device):
+    """
+    Custom collate_fn to package a batch into the (inputs, labels) format
+    that LRFinder expects.
+    """
+    # Use the original padding logic
+    src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = pad_collate_fn(batch, meta_pad_id, midi_pad_id)
+
+    if src_padded is None:
+        return None, None
+
+    # Move tensors to the correct device
+    src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = [t.to(device) for t in [src_padded, tgt_padded, src_padding_mask, tgt_padding_mask]]
+
+    # Prepare model inputs and loss targets from the batch
+    tgt_input = tgt_padded[:, :-1]
+    tgt_out = tgt_padded[:, 1:]
+    tgt_input_padding_mask = tgt_padding_mask[:, :-1]
+
+    # 'inputs' is a dictionary containing everything the model's forward pass needs.
+    inputs = {
+        "src": src_padded,
+        "tgt": tgt_input,
+        "src_padding_mask": src_padding_mask,
+        "tgt_padding_mask": tgt_input_padding_mask,
+    }
+    # 'labels' is what the criterion will compare against the model's output.
+    labels = tgt_out
+
+    return inputs, labels
+
+def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_save_dir, meta_pad_id, midi_pad_id):
     """
     Esegue il test del range del learning rate e salva il grafico.
+    This version is adapted for a Seq2Seq model by using wrapper classes.
     """
-    lr_finder = LRFinder(model, optimizer, criterion, device=device)
-    logging.info("Avvio del test del range del learning rate...")
-    # Esegui il test con un range da 1e-7 a 1, per un numero di iterazioni pari a quelle di un'epoca
-    lr_finder.range_test(train_dataloader, end_lr=1, num_iter=len(train_dataloader), step_mode="exp")
+    # 1. Wrap the model and criterion for compatibility
+    wrapped_model = _LRFModelWrapper(model)
+    wrapped_criterion = _LRFCriterionWrapper(criterion)
+
+    # 2. Create a new DataLoader with the custom collate function
+    train_dataset = train_dataloader.dataset
+    batch_size = train_dataloader.batch_size
+    lr_finder_collate = partial(_lr_finder_collate_fn, meta_pad_id=meta_pad_id, midi_pad_id=midi_pad_id, device=device)
     
-    # Trova il punto di minima perdita e suggerisce un learning rate
-    # Solitamente si prende un punto a sinistra del minimo, dove la discesa è ancora ripida
+    finder_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                                   collate_fn=lr_finder_collate, num_workers=2, drop_last=True)
+
+    # 3. Initialize LRFinder with the wrapped components
+    # The optimizer's parameters are already those of the original model, which is correct.
+    lr_finder = LRFinder(wrapped_model, optimizer, wrapped_criterion, device=device)
+    
+    logging.info("Avvio del test del range del learning rate...")
+    lr_finder.range_test(finder_dataloader, end_lr=1, num_iter=len(finder_dataloader), step_mode="exp")
+
+    # The rest of the function remains the same
     min_loss_lr = lr_finder.history['lr'][lr_finder.history['loss'].index(lr_finder.best_loss)]
     suggested_lr = min_loss_lr / 10
 
@@ -377,16 +449,14 @@ def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_sa
     logging.info(f"Learning rate con la perdita minima: {min_loss_lr:.2e}")
     logging.info(f"Learning rate suggerito (un ordine di grandezza in meno): {suggested_lr:.2e}")
 
-    # Salva il grafico della loss vs. learning rate
     plot_path = model_save_dir / "lr_finder_plot.png"
     logging.info(f"Salvataggio del grafico del learning rate finder in: {plot_path}")
     lr_finder.plot()
     plt.savefig(plot_path)
     plt.close()
-    
-    # Resetta il modello e l'ottimizzatore allo stato iniziale
+
     lr_finder.reset()
-    
+
     return suggested_lr
 
 #------------------------ 
@@ -439,7 +509,7 @@ def main_training_loop(args):
         criterion_lr = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID_LR)
         
         # --- Esegui la ricerca ---
-        best_lr = find_best_lr(model_lr, optimizer_lr, criterion_lr, train_dataloader_lr, DEVICE, args.model_save_dir)
+        best_lr = find_best_lr(model_lr, optimizer_lr, criterion_lr, train_dataloader_lr, DEVICE, args.model_save_dir, META_PAD_ID_LR, MIDI_PAD_ID_LR)
         logging.info(f"Il learning rate ottimale suggerito è: {best_lr:.2e}. Si prega di aggiornare i propri iperparametri.")
         logging.info("Processo terminato. Eseguire nuovamente l'addestramento senza il flag --find_lr.")
         return # Termina lo script dopo la ricerca

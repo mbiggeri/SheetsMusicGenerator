@@ -9,6 +9,8 @@ from tqdm import tqdm
 import concurrent.futures
 import os
 
+# --- USAGE: python analyze_midi_metadata.py /path/to/midi_directory
+
 # --- IMPORT MODULARE ---
 # Assicurati che il file 'tokenize_metadata.py' sia nella stessa cartella.
 try:
