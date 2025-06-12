@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+# Rimosso GradScaler e autocast da torch.cuda.amp per importarli direttamente dove servono
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import miditok
 from pathlib import Path
@@ -24,35 +24,24 @@ import argparse
 from tokenize_metadata import tokenize_metadata
 import config
 
-# --- USAGE: ---
+# --- USAGE (GPU/CPU): ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS
 #
-# --- TO RESUME TRAINING: ---
+# --- TO RESUME TRAINING (GPU/CPU): ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS --resume_from_checkpoint PATH/TO/transformer_best.pt
 
-
-# ### MODIFICA TPU: Import necessari e setup ambiente ###
-# Cerca di importare torch_xla. Se fallisce, assumiamo di non essere in un ambiente TPU.
-try:
-    import torch_xla.core.xla_model as xm # type: ignore
-    import torch_xla.distributed.parallel_loader as pl # type: ignore
-    IS_TPU = True
-except ImportError:
-    IS_TPU = False
 
 # --- Configurazione del logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Configurazione / Costanti ---
-# ### MODIFICA TPU: Il device verrà impostato dinamicamente in seguito ###
-DEVICE = None 
+# MODIFICA: Il device viene impostato in modo standard per PyTorch (GPU o CPU)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Iperparametri del Modello e Addestramento (Esempi!)
+# Iperparametri del Modello e Addestramento
 EPOCHS = 100
-# Nota: Su TPU, il BATCH_SIZE è per *singolo core*. Il batch size effettivo sarà BATCH_SIZE * 8.
-BATCH_SIZE = 256 
-# Nota: L'accumulo di gradienti è generalmente SCONSIGLIATO su TPU. Impostalo a 1.
-ACCUMULATION_STEPS = 1
+BATCH_SIZE = 64 # Adatta il batch size alla memoria della tua GPU
+ACCUMULATION_STEPS = 1 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
 LEARNING_RATE = 0.0003
 EMB_SIZE = 256
 NHEAD = 4
@@ -61,7 +50,9 @@ NUM_ENCODER_LAYERS = 6
 NUM_DECODER_LAYERS = 6
 DROPOUT = 0.1
 
-# ... (il resto delle funzioni `build_or_load_tokenizer`, `load_metadata_vocab`, `MutopiaDataset`, `pad_collate_fn`, `PositionalEncoding` e `Seq2SeqTransformer` rimangono INVARIATE) ...
+# ... (le funzioni `build_or_load_tokenizer`, `load_metadata_vocab`, `MutopiaDataset`, `pad_collate_fn`, `PositionalEncoding` e `Seq2SeqTransformer` rimangono INVARIATE) ...
+# Assicurati che le definizioni di queste funzioni siano presenti qui nel tuo file finale.
+# Per brevità, non le ripeto, ma sono necessarie per l'esecuzione.
 
 #------------------------
 # Tokenizer e Vocabolario
@@ -72,6 +63,7 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
     Costruisce o carica il tokenizer MIDI e la sua configurazione/vocabolario,
     utilizzando i parametri centralizzati da config.py.
     """
+    # Assumiamo che VOCAB_PATH sia definita globalmente più avanti
     if VOCAB_PATH.exists() and not force_build:
         logging.info(f"Caricamento configurazione tokenizer MIDI da {VOCAB_PATH}")
         try:
@@ -276,45 +268,34 @@ class Seq2SeqTransformer(nn.Module):
 #------------------------
 # Ciclo di Addestramento e Valutazione
 #------------------------
-# Sostituisci la vecchia funzione con questa
+# MODIFICA: Funzione semplificata per GPU/CPU
 def train_epoch(model, optimizer, criterion, train_dataloader):
     model.train()
     total_loss = 0
     processed_batches = 0
 
-    # MODIFICA: Gestione corretta di GradScaler solo per GPU
     # Determina se usare Automatic Mixed Precision (solo su GPU)
-    use_amp = (not IS_TPU) and torch.cuda.is_available()
+    use_amp = DEVICE.type == 'cuda'
     # Inizializza GradScaler solo se è effettivamente usato
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     optimizer.zero_grad(set_to_none=True)
 
-    # Imposta la progress bar correttamente a seconda dell'ambiente
-    if IS_TPU:
-        # Su TPU, l'iterazione è diretta
-        progress_bar = tqdm(train_dataloader, desc=f"Training Epoch (Core {xm.get_ordinal()})", leave=False)
-    else:
-        # Su GPU/CPU, la progress bar avvolge il dataloader
-        progress_bar = tqdm(train_dataloader, desc="Training Epoch", leave=False)
+    progress_bar = tqdm(train_dataloader, desc="Training Epoch", leave=False)
 
     for batch_data in progress_bar:
         if batch_data[0] is None:
             continue
         
-        # Sposta i dati sul device solo se non siamo su TPU
-        # (su TPU, ParallelLoader lo fa già)
-        if not IS_TPU:
-            src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
-        else:
-            src, tgt, src_padding_mask, tgt_padding_mask = batch_data
+        # Sposta sempre i dati sul device (GPU o CPU)
+        src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
 
         tgt_input = tgt[:, :-1]
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
         tgt_out = tgt[:, 1:]
 
-        # Usa autocast per la mixed precision (float16 su GPU, bfloat16 su TPU)
-        with torch.autocast(device_type="cuda" if use_amp else "cpu", dtype=torch.bfloat16 if IS_TPU else torch.float16, enabled=use_amp or IS_TPU):
+        # Usa autocast per la mixed precision (float16 su GPU)
+        with torch.cuda.amp.autocast(enabled=use_amp):
             logits = model(src=src, tgt=tgt_input,
                            src_padding_mask=src_padding_mask,
                            tgt_padding_mask=tgt_input_padding_mask,
@@ -327,12 +308,9 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
-        else:  # Percorso TPU o CPU
+        else:  # Percorso CPU
             loss.backward()
-            if IS_TPU:
-                xm.optimizer_step(optimizer)  # Step specifico per XLA
-            else:
-                optimizer.step()
+            optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
         total_loss += loss.item()
@@ -344,32 +322,32 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         return 0.0
     return total_loss / processed_batches
 
+# MODIFICA: Funzione semplificata per GPU/CPU
 def evaluate(model, criterion, dataloader):
     model.eval()
     total_loss = 0
     processed_batches = 0
     
-    desc = f"Evaluation (Core {xm.get_ordinal()})" if IS_TPU else "Evaluation"
-    progress_bar = tqdm(dataloader, desc=desc, leave=False)
+    progress_bar = tqdm(dataloader, desc="Evaluation", leave=False)
 
     with torch.no_grad():
         for batch_data in progress_bar:
             if batch_data[0] is None: continue
             
-            if not IS_TPU:
-                src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
-            else:
-                src, tgt, src_padding_mask, tgt_padding_mask = batch_data
+            # Sposta sempre i dati sul device
+            src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
 
             tgt_input = tgt[:, :-1]
             tgt_out = tgt[:, 1:]
             tgt_input_padding_mask = tgt_padding_mask[:, :-1]
             
-            logits = model(src=src, tgt=tgt_input,
-                           src_padding_mask=src_padding_mask,
-                           tgt_padding_mask=tgt_input_padding_mask,
-                           memory_key_padding_mask=src_padding_mask)
-            loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            with torch.cuda.amp.autocast(enabled=(DEVICE.type == 'cuda')):
+                logits = model(src=src, tgt=tgt_input,
+                               src_padding_mask=src_padding_mask,
+                               tgt_padding_mask=tgt_input_padding_mask,
+                               memory_key_padding_mask=src_padding_mask)
+                loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            
             total_loss += loss.item()
             processed_batches += 1
             progress_bar.set_postfix({'eval_loss': f'{total_loss / processed_batches:.4f}'})
@@ -381,50 +359,34 @@ def evaluate(model, criterion, dataloader):
 # Esecuzione Principale
 #------------------------
 
-# ### MODIFICA TPU: La logica principale è incapsulata in una funzione ###
-# Questo è il pattern richiesto da torch_xla.distributed.xla_multiprocessing
-def main_training_loop(rank, args):
-    global DEVICE, VOCAB_PATH, METADATA_VOCAB_PATH # Rendi le variabili globali accessibili
+# MODIFICA: La funzione non necessita più del parametro 'rank'
+def main_training_loop(args):
+    global VOCAB_PATH, METADATA_VOCAB_PATH # Rendi le variabili globali accessibili
     
-    # Imposta il device corretto per il processo corrente
-    if IS_TPU:
-        DEVICE = xm.xla_device()
-        # Stampa solo dal processo master per evitare output duplicati
-        log_fn = xm.master_print
-    else:
-        DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        log_fn = logging.info
-    
-    # Inizializza le variabili globali del path basate sugli argomenti
+    # Le variabili globali del path vengono inizializzate qui
     DATA_DIR = args.data_dir
     MODEL_SAVE_DIR = args.model_save_dir
     SPLITS_DIR = DATA_DIR / "dataset_splits"
     VOCAB_PATH = DATA_DIR / "midi_vocab.json"
     METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json"
     
-    # Il master si occupa di creare le directory
-    if not IS_TPU or xm.is_master_ordinal():
-        MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-        log_fn(f"Ambiente rilevato: {'TPU' if IS_TPU else 'GPU/CPU'}")
-        log_fn(f"Device in uso: {DEVICE}")
-
-    # Attendi che il master abbia finito prima di procedere (per TPU)
-    if IS_TPU:
-        xm.rendezvous('setup_directories')
+    MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Ambiente rilevato: GPU/CPU")
+    logging.info(f"Device in uso: {DEVICE}")
 
     checkpoint = None
     if args.resume_from_checkpoint and args.resume_from_checkpoint.exists():
-        log_fn(f"Trovato checkpoint: {args.resume_from_checkpoint}. Caricamento in corso...")
-        # Carica sul dispositivo corrente (CPU per poi spostare)
+        logging.info(f"Trovato checkpoint: {args.resume_from_checkpoint}. Caricamento in corso...")
+        # Carica sulla CPU prima, poi sposta il modello sul device corretto
         checkpoint = torch.load(args.resume_from_checkpoint, map_location='cpu')
-        log_fn("Checkpoint caricato.")
+        logging.info("Checkpoint caricato.")
     elif args.resume_from_checkpoint:
         logging.warning(f"Checkpoint specificato ma non trovato in: {args.resume_from_checkpoint}. Avvio di un nuovo addestramento.")
 
-    log_fn(f"Utilizzo del dataset da: {DATA_DIR}")
-    log_fn(f"I modelli verranno salvati in: {MODEL_SAVE_DIR}")
+    logging.info(f"Utilizzo del dataset da: {DATA_DIR}")
+    logging.info(f"I modelli verranno salvati in: {MODEL_SAVE_DIR}")
     
-    log_fn("--- Preparazione Tokenizer e Vocabolari ---")
+    logging.info("--- Preparazione Tokenizer e Vocabolari ---")
     midi_tokenizer = build_or_load_tokenizer(force_build=False)
     metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
 
@@ -433,10 +395,10 @@ def main_training_loop(rank, args):
     MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
     META_PAD_ID = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
     
-    log_fn(f"MIDI Vocab Size: {MIDI_VOCAB_SIZE}, MIDI PAD ID: {MIDI_PAD_ID}")
-    log_fn(f"Meta Vocab Size: {META_VOCAB_SIZE}, Meta PAD ID: {META_PAD_ID}")
+    logging.info(f"MIDI Vocab Size: {MIDI_VOCAB_SIZE}, MIDI PAD ID: {MIDI_PAD_ID}")
+    logging.info(f"Meta Vocab Size: {META_VOCAB_SIZE}, Meta PAD ID: {META_PAD_ID}")
 
-    log_fn("--- Creazione Dataset e DataLoader ---")
+    logging.info("--- Creazione Dataset e DataLoader ---")
     train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, 
                                      config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
     val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map,
@@ -444,32 +406,18 @@ def main_training_loop(rank, args):
 
     collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
     
-    # Crea un sampler distribuito per TPU
-    train_sampler = torch.utils.data.distributed.DistributedSampler(
-        train_dataset, num_replicas=xm.xrt_world_size() if IS_TPU else 1,
-        rank=xm.get_ordinal() if IS_TPU else 0, shuffle=True
-    )
-    val_sampler = torch.utils.data.distributed.DistributedSampler(
-        val_dataset, num_replicas=xm.xrt_world_size() if IS_TPU else 1,
-        rank=xm.get_ordinal() if IS_TPU else 0, shuffle=False
-    )
-    
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler, 
+    # MODIFICA: DataLoader standard, senza sampler distribuito.
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
                                   collate_fn=collate_fn_with_padding_ids, num_workers=2, drop_last=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler,
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
                                 collate_fn=collate_fn_with_padding_ids, num_workers=2, drop_last=True)
 
-    # Usa ParallelLoader per TPU per pre-caricare i dati su ogni core
-    if IS_TPU:
-        train_dataloader = pl.ParallelLoader(train_dataloader, [DEVICE]).per_device_loader(DEVICE)
-        val_dataloader = pl.ParallelLoader(val_dataloader, [DEVICE]).per_device_loader(DEVICE)
-
-    log_fn("--- Inizializzazione Modello ---")
+    logging.info("--- Inizializzazione Modello ---")
     if checkpoint and 'model_params' in checkpoint:
-        log_fn("Inizializzazione del modello con i parametri salvati nel checkpoint.")
+        logging.info("Inizializzazione del modello con i parametri salvati nel checkpoint.")
         model_params_to_save = checkpoint['model_params']
     else:
-        log_fn("Inizializzazione di un nuovo modello con i parametri di default.")
+        logging.info("Inizializzazione di un nuovo modello con i parametri di default.")
         max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100 
         model_params_to_save = {
             'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
@@ -481,7 +429,7 @@ def main_training_loop(rank, args):
     model = Seq2SeqTransformer(**model_params_to_save).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1, verbose=True)
 
     start_epoch = 1
     best_val_loss = float('inf')
@@ -489,95 +437,79 @@ def main_training_loop(rank, args):
     patience_early_stopping = 10
 
     if checkpoint:
-        log_fn("Ripristino dello stato del modello e dell'ottimizzatore.")
+        logging.info("Ripristino dello stato del modello e dell'ottimizzatore.")
         model.load_state_dict(checkpoint['model_state_dict'])
         if 'optimizer_state_dict' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        log_fn(f"Ripresa dall'epoca {start_epoch} con best_val_loss = {best_val_loss:.4f}")
+        logging.info(f"Ripresa dall'epoca {start_epoch} con best_val_loss = {best_val_loss:.4f}")
 
-    log_fn(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     vocab_info_to_save = {
         'midi_vocab_path': str(VOCAB_PATH), 'metadata_vocab_path': str(METADATA_VOCAB_PATH),
         'midi_tokenizer_strategy': config.MIDI_TOKENIZER_STRATEGY.__name__
     }
 
-    log_fn("--- Inizio Addestramento ---")
+    logging.info("--- Inizio Addestramento ---")
     
-    epoch = 0
+    final_epoch = 0
     for epoch in range(start_epoch, EPOCHS + 1):
-        # Imposta l'epoca nel sampler per garantire un rimescolamento corretto
-        if IS_TPU:
-            train_sampler.set_epoch(epoch)
-            val_sampler.set_epoch(epoch)
-            
-        log_fn(f"--- Epoch {epoch}/{EPOCHS} ---")
+        final_epoch = epoch
+        logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
         start_time_epoch = time.time()
         
         train_loss_epoch = train_epoch(model, optimizer, criterion, train_dataloader)
         
-        # ### MODIFICA TPU: La loss viene raccolta da tutti i core
-        if IS_TPU:
-            train_loss_epoch = xm.mesh_reduce('train_loss_reduce', train_loss_epoch, np.mean)
-
         current_val_loss = float('inf')
         if len(val_dataset) > 0:
             current_val_loss = evaluate(model, criterion, val_dataloader)
-            if IS_TPU:
-                current_val_loss = xm.mesh_reduce('val_loss_reduce', current_val_loss, np.mean)
         
         epoch_duration_total = time.time() - start_time_epoch
-        log_fn(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {current_val_loss:.4f} (Durata: {epoch_duration_total:.2f}s)")
+        logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {current_val_loss:.4f} (Durata: {epoch_duration_total:.2f}s)")
 
         scheduler.step(current_val_loss)
 
-        # Il salvataggio viene fatto solo dal processo master
-        if (not IS_TPU or xm.is_master_ordinal()):
-            if current_val_loss < best_val_loss:
-                best_val_loss = current_val_loss
-                epochs_no_improve = 0
-                best_model_path = MODEL_SAVE_DIR / "transformer_best.pt"
-                log_fn(f"Nuova best validation loss: {best_val_loss:.4f}. Salvataggio modello in {best_model_path}")
-                # xm.save gestisce correttamente il salvataggio da un device XLA
-                save_payload = {
-                    'epoch': epoch, 'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-                    'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-                }
-                if IS_TPU: xm.save(save_payload, best_model_path)
-                else: torch.save(save_payload, best_model_path)
-            else:
-                epochs_no_improve += 1
-            
-            if epoch % 10 == 0:
-                periodic_model_path = MODEL_SAVE_DIR / f"transformer_epoch_{epoch}.pt"
-                log_fn(f"Salvataggio checkpoint periodico (epoch {epoch}): {periodic_model_path}")
-                save_payload = {
-                    'epoch': epoch, 'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-                    'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-                }
-                if IS_TPU: xm.save(save_payload, periodic_model_path)
-                else: torch.save(save_payload, periodic_model_path)
+        # MODIFICA: Logica di salvataggio semplificata
+        if current_val_loss < best_val_loss:
+            best_val_loss = current_val_loss
+            epochs_no_improve = 0
+            best_model_path = MODEL_SAVE_DIR / "transformer_best.pt"
+            logging.info(f"Nuova best validation loss: {best_val_loss:.4f}. Salvataggio modello in {best_model_path}")
+            save_payload = {
+                'epoch': epoch, 'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
+                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
+            }
+            torch.save(save_payload, best_model_path)
+        else:
+            epochs_no_improve += 1
         
+        if epoch % 10 == 0:
+            periodic_model_path = MODEL_SAVE_DIR / f"transformer_epoch_{epoch}.pt"
+            logging.info(f"Salvataggio checkpoint periodico (epoch {epoch}): {periodic_model_path}")
+            save_payload = {
+                'epoch': epoch, 'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
+                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
+            }
+            torch.save(save_payload, periodic_model_path)
+    
         if epochs_no_improve >= patience_early_stopping:
-            log_fn(f"Nessun miglioramento per {patience_early_stopping} epoche. Early stopping.")
+            logging.info(f"Nessun miglioramento per {patience_early_stopping} epoche. Early stopping.")
             break 
             
-    if not IS_TPU or xm.is_master_ordinal():
-        final_model_path = MODEL_SAVE_DIR / "transformer_final.pt"
-        log_fn(f"Salvataggio checkpoint finale: {final_model_path}")
-        save_payload = {
-            'epoch': epoch, 'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-            'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-        }
-        if IS_TPU: xm.save(save_payload, final_model_path)
-        else: torch.save(save_payload, final_model_path)
+    final_model_path = MODEL_SAVE_DIR / "transformer_final.pt"
+    logging.info(f"Salvataggio checkpoint finale: {final_model_path}")
+    save_payload = {
+        'epoch': final_epoch, 'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
+        'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
+    }
+    torch.save(save_payload, final_model_path)
 
-    log_fn("--- Addestramento Terminato ---")
+    logging.info("--- Addestramento Terminato ---")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Addestra un modello Transformer per la generazione musicale.")
@@ -586,17 +518,5 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from_checkpoint", type=Path, default=None, help="Percorso opzionale a un checkpoint per riprendere l'addestramento.")
     args = parser.parse_args()
 
-    if IS_TPU:
-        # Import xmp here, only when needed
-        import torch_xla.distributed.xla_multiprocessing as xmp # type: ignore  <-- ADD THIS LINE
-
-        print("TPU rilevata. Configurazione dell'ambiente PJRT in corso...")
-        os.environ['PJRT_DEVICE'] = 'TPU'
-        
-        print("Avvio di xmp.spawn...")
-        xmp.spawn(main_training_loop, args=(args,), start_method='spawn')
-        print("xmp.spawn completato.")
-    else:
-        # Se non è una TPU, esegui la funzione normally in un singolo processo
-        # il rank 0 è fittizio, non viene usato
-        main_training_loop(0, args)
+    # MODIFICA: Esecuzione diretta della funzione di training, senza logica TPU
+    main_training_loop(args)
