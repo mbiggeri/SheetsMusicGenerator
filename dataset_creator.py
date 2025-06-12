@@ -82,7 +82,7 @@ python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_da
 '''
 
 # --- EXAMPLE --------------------------------------------
-# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\The_Magic_of_MIDI" --fast --transpose-to-C --min_token_freq 1500
+# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\The_Magic_of_MIDI_1024" --fast --transpose-to-C --min_token_freq 1500
 # --------------------------------------------------------
 
 # --- Additions for Tokenization and Chunking ---

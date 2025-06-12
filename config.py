@@ -56,7 +56,7 @@ META_EOS_TOKEN_NAME = "<eos_meta>"
 # =============================================================================
 
 # Lunghezza massima della sequenza di token MIDI per ogni chunk
-MAX_SEQ_LEN_MIDI = 2048
+MAX_SEQ_LEN_MIDI = 1024
 
 # Lunghezza minima della sequenza di token MIDI per considerare un chunk valido
 MIN_CHUNK_LEN_MIDI = 128

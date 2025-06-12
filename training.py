@@ -4,6 +4,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
+from torch_lr_finder import LRFinder
+import matplotlib.pyplot as plt
 # Rimosso GradScaler e autocast da torch.cuda.amp per importarli direttamente dove servono
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import miditok
@@ -23,6 +25,7 @@ import numpy as np
 import argparse
 from tokenize_metadata import tokenize_metadata
 import config
+
 
 # --- USAGE (GPU/CPU): ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS
@@ -268,7 +271,6 @@ class Seq2SeqTransformer(nn.Module):
 #------------------------
 # Ciclo di Addestramento e Valutazione
 #------------------------
-# MODIFICA: Funzione semplificata per GPU/CPU
 def train_epoch(model, optimizer, criterion, train_dataloader):
     model.train()
     total_loss = 0
@@ -322,7 +324,6 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         return 0.0
     return total_loss / processed_batches
 
-# MODIFICA: Funzione semplificata per GPU/CPU
 def evaluate(model, criterion, dataloader):
     model.eval()
     total_loss = 0
@@ -355,11 +356,42 @@ def evaluate(model, criterion, dataloader):
     if processed_batches == 0: return float('inf')
     return total_loss / processed_batches
 
+# ------------------------
+# Learning Rate Finder
+# ------------------------
+def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_save_dir):
+    """
+    Esegue il test del range del learning rate e salva il grafico.
+    """
+    lr_finder = LRFinder(model, optimizer, criterion, device=device)
+    logging.info("Avvio del test del range del learning rate...")
+    # Esegui il test con un range da 1e-7 a 1, per un numero di iterazioni pari a quelle di un'epoca
+    lr_finder.range_test(train_dataloader, end_lr=1, num_iter=len(train_dataloader), step_mode="exp")
+    
+    # Trova il punto di minima perdita e suggerisce un learning rate
+    # Solitamente si prende un punto a sinistra del minimo, dove la discesa è ancora ripida
+    min_loss_lr = lr_finder.history['lr'][lr_finder.history['loss'].index(lr_finder.best_loss)]
+    suggested_lr = min_loss_lr / 10
+
+    logging.info(f"Test del learning rate completato.")
+    logging.info(f"Learning rate con la perdita minima: {min_loss_lr:.2e}")
+    logging.info(f"Learning rate suggerito (un ordine di grandezza in meno): {suggested_lr:.2e}")
+
+    # Salva il grafico della loss vs. learning rate
+    plot_path = model_save_dir / "lr_finder_plot.png"
+    logging.info(f"Salvataggio del grafico del learning rate finder in: {plot_path}")
+    lr_finder.plot()
+    plt.savefig(plot_path)
+    plt.close()
+    
+    # Resetta il modello e l'ottimizzatore allo stato iniziale
+    lr_finder.reset()
+    
+    return suggested_lr
+
 #------------------------ 
 # Esecuzione Principale
 #------------------------
-
-# MODIFICA: La funzione non necessita più del parametro 'rank'
 def main_training_loop(args):
     global VOCAB_PATH, METADATA_VOCAB_PATH # Rendi le variabili globali accessibili
     
@@ -373,6 +405,44 @@ def main_training_loop(args):
     MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     logging.info(f"Ambiente rilevato: GPU/CPU")
     logging.info(f"Device in uso: {DEVICE}")
+    
+    # --- Find Best Learning Rate (if requested) ---
+    if args.find_lr:
+        # Crea un'istanza temporanea del modello e dei dati solo per il test del LR
+        logging.info("--- Setup per la ricerca del Learning Rate ---")
+        
+        # --- Tokenizer e Vocabolari ---
+        midi_tokenizer_lr = build_or_load_tokenizer(force_build=False)
+        metadata_vocab_map_lr = load_metadata_vocab(METADATA_VOCAB_PATH)
+        MIDI_VOCAB_SIZE_LR = len(midi_tokenizer_lr)
+        META_VOCAB_SIZE_LR = len(metadata_vocab_map_lr)
+        MIDI_PAD_ID_LR = midi_tokenizer_lr[config.MIDI_PAD_TOKEN_NAME]
+        META_PAD_ID_LR = metadata_vocab_map_lr[config.META_PAD_TOKEN_NAME]
+
+        # --- Dataset e DataLoader ---
+        train_dataset_lr = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer_lr, metadata_vocab_map_lr, 
+                                          config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
+        collate_fn_lr = partial(pad_collate_fn, meta_pad_id=META_PAD_ID_LR, midi_pad_id=MIDI_PAD_ID_LR)
+        train_dataloader_lr = DataLoader(train_dataset_lr, batch_size=BATCH_SIZE, shuffle=True,
+                                       collate_fn=collate_fn_lr, num_workers=2, drop_last=True)
+                                       
+        # --- Modello ---
+        max_pe_len_calculated_lr = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100
+        model_params_lr = {
+            'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
+            'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE_LR,
+            'tgt_vocab_size': MIDI_VOCAB_SIZE_LR, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
+            'max_pe_len': max_pe_len_calculated_lr
+        }
+        model_lr = Seq2SeqTransformer(**model_params_lr).to(DEVICE)
+        optimizer_lr = optim.AdamW(model_lr.parameters(), lr=1e-7) # LR iniziale molto basso
+        criterion_lr = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID_LR)
+        
+        # --- Esegui la ricerca ---
+        best_lr = find_best_lr(model_lr, optimizer_lr, criterion_lr, train_dataloader_lr, DEVICE, args.model_save_dir)
+        logging.info(f"Il learning rate ottimale suggerito è: {best_lr:.2e}. Si prega di aggiornare i propri iperparametri.")
+        logging.info("Processo terminato. Eseguire nuovamente l'addestramento senza il flag --find_lr.")
+        return # Termina lo script dopo la ricerca
 
     checkpoint = None
     if args.resume_from_checkpoint and args.resume_from_checkpoint.exists():
@@ -516,6 +586,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_dir", type=Path, required=True, help="Percorso della cartella base del dataset.")
     parser.add_argument("--model_save_dir", type=Path, required=True, help="Percorso per salvare i checkpoint del modello.")
     parser.add_argument("--resume_from_checkpoint", type=Path, default=None, help="Percorso opzionale a un checkpoint per riprendere l'addestramento.")
+    parser.add_argument("--find_lr", action="store_true", help="Esegui il test del range del learning rate e termina.")
     args = parser.parse_args()
 
     # MODIFICA: Esecuzione diretta della funzione di training, senza logica TPU
