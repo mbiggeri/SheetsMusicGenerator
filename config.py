@@ -29,7 +29,7 @@ TOKENIZER_PARAMS = miditok.TokenizerConfig(
     
     # PARAMETRI CHE DEFINISCONO REMI+
     use_programs=True,                  # Abilita i token Program per gestire gli strumenti.
-    one_token_stream_for_programs=True, # Gestisce le tracce in un unico flusso, come richiesto da REMI+.
+    one_token_stream_for_programs=False, # Gestisce le tracce in un unico flusso, come richiesto da REMI+.
     use_time_signatures=True,           # Abilita i token per i cambi di tempo (Time Signature).
 
     # Altri parametri consigliati per una rappresentazione ricca

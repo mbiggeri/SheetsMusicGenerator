@@ -588,8 +588,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if IS_TPU:
-        # MODIFICA: Rimosso nprocs=8. La libreria rileverà automaticamente i core.
-        # Avvia i processi su tutti i core TPU disponibili eseguendo la funzione `main_training_loop`
+        # Imposta la variabile d'ambiente per il runtime PJRT prima dello spawn.
+        # Questo indica a torch_xla di auto-configurarsi per l'ambiente TPU di Colab.
+        os.environ['PJRT_DEVICE'] = 'TPU'
+        
+        # Avvia i processi su tutti i core TPU disponibili
         xmp.spawn(main_training_loop, args=(args,), start_method='fork')
     else:
         # Se non è una TPU, esegui la funzione normally in un singolo processo
