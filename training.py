@@ -282,38 +282,29 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
     model.train()
     total_loss = 0
     processed_batches = 0
-    
-    # --- CORREZIONE 1: Sintassi aggiornata per GradScaler ---
+
+    # MODIFICA: Gestione corretta di GradScaler solo per GPU
+    # Determina se usare Automatic Mixed Precision (solo su GPU)
     use_amp = (not IS_TPU) and torch.cuda.is_available()
-    scaler = torch.amp.GradScaler(device_type="cuda", enabled=use_amp)
-    
-    optimizer.zero_grad()
-    
+    # Inizializza GradScaler solo se è effettivamente usato
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    optimizer.zero_grad(set_to_none=True)
+
     # Imposta la progress bar correttamente a seconda dell'ambiente
     if IS_TPU:
-        progress_bar = tqdm(train_dataloader, total=len(train_dataloader), desc=f"Training Epoch (Core {xm.get_ordinal()})", leave=False)
         # Su TPU, l'iterazione è diretta
-        iterator = progress_bar
+        progress_bar = tqdm(train_dataloader, desc=f"Training Epoch (Core {xm.get_ordinal()})", leave=False)
     else:
         # Su GPU/CPU, la progress bar avvolge il dataloader
-        progress_bar = tqdm(train_dataloader, total=len(train_dataloader), desc="Training Epoch", leave=False)
-        # e si usa enumerate sull'oggetto tqdm
-        iterator = enumerate(progress_bar)
+        progress_bar = tqdm(train_dataloader, desc="Training Epoch", leave=False)
 
-    # --- CORREZIONE 2: Logica di iterazione e spostamento dati ---
-    for i, batch_data in iterator:
-        # Se i==0 e non siamo su TPU, significa che il batch_data è in realtà
-        # (indice, dati), quindi prendiamo solo i dati. Questo è un fix per 
-        # la logica di iterazione che causava l'errore. Ma il fix principale
-        # è come `iterator` viene definito sopra. Per sicurezza, gestiamo entrambi.
-        if not IS_TPU and isinstance(batch_data, tuple) and isinstance(batch_data[0], int):
-             # Questo scenario non dovrebbe più accadere con il fix sopra,
-             # ma lo lasciamo come ulteriore sicurezza.
-             batch_data = batch_data[1]
-
-        if batch_data[0] is None: continue
+    for batch_data in progress_bar:
+        if batch_data[0] is None:
+            continue
         
         # Sposta i dati sul device solo se non siamo su TPU
+        # (su TPU, ParallelLoader lo fa già)
         if not IS_TPU:
             src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
         else:
@@ -323,35 +314,35 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
         tgt_out = tgt[:, 1:]
 
-        with torch.amp.autocast(device_type="cuda" if not IS_TPU else "cpu", dtype=torch.float16 if not IS_TPU else torch.bfloat16, enabled=use_amp or IS_TPU):
+        # Usa autocast per la mixed precision (float16 su GPU, bfloat16 su TPU)
+        with torch.autocast(device_type="cuda" if use_amp else "cpu", dtype=torch.bfloat16 if IS_TPU else torch.float16, enabled=use_amp or IS_TPU):
             logits = model(src=src, tgt=tgt_input,
                            src_padding_mask=src_padding_mask,
                            tgt_padding_mask=tgt_input_padding_mask,
                            memory_key_padding_mask=src_padding_mask)
             loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
-            if ACCUMULATION_STEPS > 1 and not IS_TPU: # Accumulation solo su GPU
-                loss = loss / ACCUMULATION_STEPS
 
-        if use_amp: # Logica GPU con AMP
+        # Logica di backpropagation e update pesi
+        if use_amp:  # Percorso GPU con AMP
             scaler.scale(loss).backward()
-            if (i + 1) % ACCUMULATION_STEPS == 0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-                optimizer.zero_grad()
-        else: # Logica TPU o CPU
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+        else:  # Percorso TPU o CPU
             loss.backward()
             if IS_TPU:
-                xm.optimizer_step(optimizer)
+                xm.optimizer_step(optimizer)  # Step specifico per XLA
             else:
                 optimizer.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
-        total_loss += loss.item() * (ACCUMULATION_STEPS if ACCUMULATION_STEPS > 1 and not IS_TPU else 1)
+        total_loss += loss.item()
         processed_batches += 1
         progress_bar.set_postfix({'train_loss': f'{total_loss / processed_batches:.4f}'})
 
+    # Calcola la media della loss per l'epoca
+    if processed_batches == 0:
+        return 0.0
     return total_loss / processed_batches
 
 def evaluate(model, criterion, dataloader):
