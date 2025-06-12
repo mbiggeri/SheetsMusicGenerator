@@ -597,9 +597,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if IS_TPU:
-        # Avvia 8 processi, uno per ogni core TPU, eseguendo la funzione `main_training_loop`
-        xmp.spawn(main_training_loop, args=(args,), nprocs=8, start_method='fork')
+        # MODIFICA: Rimosso nprocs=8. La libreria rileverà automaticamente i core.
+        # Avvia i processi su tutti i core TPU disponibili eseguendo la funzione `main_training_loop`
+        xmp.spawn(main_training_loop, args=(args,), start_method='fork')
     else:
-        # Se non è una TPU, esegui la funzione normalmente in un singolo processo
+        # Se non è una TPU, esegui la funzione normally in un singolo processo
         # il rank 0 è fittizio, non viene usato
         main_training_loop(0, args)
