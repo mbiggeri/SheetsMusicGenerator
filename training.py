@@ -588,12 +588,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if IS_TPU:
-        # Imposta la variabile d'ambiente per il runtime PJRT prima dello spawn.
-        # Questo indica a torch_xla di auto-configurarsi per l'ambiente TPU di Colab.
+        # QUESTA È LA PARTE CRITICA
+        # Imposta la variabile d'ambiente PRIMA di qualsiasi altra cosa di xla
+        print("TPU rilevata. Configurazione dell'ambiente PJRT in corso...")
         os.environ['PJRT_DEVICE'] = 'TPU'
         
-        # Avvia i processi su tutti i core TPU disponibili
+        # Ora avvia i processi
+        print("Avvio di xmp.spawn...")
         xmp.spawn(main_training_loop, args=(args,), start_method='fork')
+        print("xmp.spawn completato.")
     else:
         # Se non è una TPU, esegui la funzione normally in un singolo processo
         # il rank 0 è fittizio, non viene usato
