@@ -206,7 +206,7 @@ class MutopiaDataset(Dataset):
         return src_tensor, tgt_tensor
 
 def pad_collate_fn(batch, meta_pad_id, midi_pad_id):
-    batch = [item for item in batch if item is not None]
+    batch = [item for item in batch if item is not None and item[0].numel() > 0 and item[1].numel() > 0]
     if not batch: return None, None, None, None
     src_batch, tgt_batch = zip(*batch)
     src_padded = pad_sequence(src_batch, batch_first=True, padding_value=meta_pad_id)
@@ -262,7 +262,7 @@ class Seq2SeqTransformer(nn.Module):
 
         if tgt_mask is None:
              tgt_len = tgt.size(1)
-             tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=DEVICE, dtype=torch.bool), diagonal=1)
+             tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=tgt.device, dtype=torch.bool), diagonal=1)
         
         if memory_key_padding_mask is None:
              memory_key_padding_mask = src_padding_mask
