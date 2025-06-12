@@ -277,30 +277,43 @@ class Seq2SeqTransformer(nn.Module):
 #------------------------
 # Ciclo di Addestramento e Valutazione
 #------------------------
-
-# ### MODIFICA TPU: Il ciclo di train/eval è stato modificato per supportare entrambi gli ambienti ###
+# Sostituisci la vecchia funzione con questa
 def train_epoch(model, optimizer, criterion, train_dataloader):
     model.train()
     total_loss = 0
     processed_batches = 0
     
-    # Usa GradScaler solo per CUDA, non per TPU
+    # --- CORREZIONE 1: Sintassi aggiornata per GradScaler ---
     use_amp = (not IS_TPU) and torch.cuda.is_available()
-    scaler = GradScaler(enabled=use_amp)
+    scaler = torch.amp.GradScaler(device_type="cuda", enabled=use_amp)
     
     optimizer.zero_grad()
     
-    # Per TPU, usiamo ParallelLoader che gestisce la distribuzione dei dati
+    # Imposta la progress bar correttamente a seconda dell'ambiente
     if IS_TPU:
-        # L'enumerazione avviene direttamente sul loader di XLA
         progress_bar = tqdm(train_dataloader, total=len(train_dataloader), desc=f"Training Epoch (Core {xm.get_ordinal()})", leave=False)
+        # Su TPU, l'iterazione è diretta
+        iterator = progress_bar
     else:
-        progress_bar = tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="Training Epoch", leave=False)
+        # Su GPU/CPU, la progress bar avvolge il dataloader
+        progress_bar = tqdm(train_dataloader, total=len(train_dataloader), desc="Training Epoch", leave=False)
+        # e si usa enumerate sull'oggetto tqdm
+        iterator = enumerate(progress_bar)
 
-    for i, batch_data in (enumerate(progress_bar) if not IS_TPU else progress_bar):
+    # --- CORREZIONE 2: Logica di iterazione e spostamento dati ---
+    for i, batch_data in iterator:
+        # Se i==0 e non siamo su TPU, significa che il batch_data è in realtà
+        # (indice, dati), quindi prendiamo solo i dati. Questo è un fix per 
+        # la logica di iterazione che causava l'errore. Ma il fix principale
+        # è come `iterator` viene definito sopra. Per sicurezza, gestiamo entrambi.
+        if not IS_TPU and isinstance(batch_data, tuple) and isinstance(batch_data[0], int):
+             # Questo scenario non dovrebbe più accadere con il fix sopra,
+             # ma lo lasciamo come ulteriore sicurezza.
+             batch_data = batch_data[1]
+
         if batch_data[0] is None: continue
         
-        # Su GPU, i dati vanno spostati manualmente. Su TPU no, ParallelLoader lo gestisce.
+        # Sposta i dati sul device solo se non siamo su TPU
         if not IS_TPU:
             src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
         else:
@@ -310,13 +323,13 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
         tgt_input_padding_mask = tgt_padding_mask[:, :-1]
         tgt_out = tgt[:, 1:]
 
-        with autocast(device_type="cuda" if not IS_TPU else "cpu", dtype=torch.float16 if not IS_TPU else torch.bfloat16, enabled=use_amp or IS_TPU):
+        with torch.amp.autocast(device_type="cuda" if not IS_TPU else "cpu", dtype=torch.float16 if not IS_TPU else torch.bfloat16, enabled=use_amp or IS_TPU):
             logits = model(src=src, tgt=tgt_input,
                            src_padding_mask=src_padding_mask,
                            tgt_padding_mask=tgt_input_padding_mask,
                            memory_key_padding_mask=src_padding_mask)
             loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
-            if ACCUMULATION_STEPS > 1:
+            if ACCUMULATION_STEPS > 1 and not IS_TPU: # Accumulation solo su GPU
                 loss = loss / ACCUMULATION_STEPS
 
         if use_amp: # Logica GPU con AMP
@@ -329,14 +342,13 @@ def train_epoch(model, optimizer, criterion, train_dataloader):
                 optimizer.zero_grad()
         else: # Logica TPU o CPU
             loss.backward()
-            # xm.optimizer_step esegue la sincronizzazione dei gradienti tra i core TPU
             if IS_TPU:
                 xm.optimizer_step(optimizer)
-            else: # CPU
+            else:
                 optimizer.step()
             optimizer.zero_grad()
 
-        total_loss += loss.item() * (ACCUMULATION_STEPS if ACCUMULATION_STEPS > 1 else 1)
+        total_loss += loss.item() * (ACCUMULATION_STEPS if ACCUMULATION_STEPS > 1 and not IS_TPU else 1)
         processed_batches += 1
         progress_bar.set_postfix({'train_loss': f'{total_loss / processed_batches:.4f}'})
 
