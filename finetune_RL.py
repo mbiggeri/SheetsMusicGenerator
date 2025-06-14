@@ -1,4 +1,4 @@
-# finetune_rl.py (Versione completa e autonoma)
+# finetune_RL.py (Versione aggiornata, autonoma e corretta)
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -18,7 +18,8 @@ import argparse
 # Assicurati che questi file siano accessibili dal tuo ambiente Python
 from generate_music_RL import Seq2SeqTransformer, generate_multi_chunk_midi, enhance_midi_score
 from tokenize_metadata import tokenize_metadata
-from training import build_or_load_tokenizer, load_metadata_vocab
+# --- MODIFICA: Rimosso l'import di 'build_or_load_tokenizer' da training ---
+from training import load_metadata_vocab
 import config
 
 # Configurazione del logging
@@ -26,6 +27,41 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Impostazione del device
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ==============================================================================
+# === NUOVA FUNZIONE LOCALE PER CARICARE IL TOKENIZER (SOSTITUISCE L'IMPORT) ===
+# ==============================================================================
+
+def build_or_load_tokenizer_rl(vocab_path: Path):
+    """
+    Versione locale per caricare il tokenizer MIDI per il fine-tuning RL.
+    Questa funzione richiede che il vocabolario esista già.
+    """
+    if not vocab_path.exists():
+        logging.error(f"Errore critico: il file del vocabolario del tokenizer non è stato trovato in {vocab_path}.")
+        logging.error("Esegui prima dataset_creator.py per generare il vocabolario.")
+        raise FileNotFoundError(f"Vocabolario tokenizer non trovato in {vocab_path}.")
+
+    logging.info(f"Caricamento del tokenizer MIDI da {vocab_path} per RL.")
+    try:
+        # Carica il tokenizer usando la strategia e i parametri definiti in config.py
+        tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(vocab_path))
+        logging.info(f"Tokenizer caricato con successo da {vocab_path}")
+    except Exception as e:
+        logging.error(f"Errore irreversibile durante il caricamento del tokenizer da {vocab_path}: {e}", exc_info=True)
+        raise IOError(f"Impossibile caricare il tokenizer da {vocab_path}.")
+
+    # Controlli di integrità del tokenizer caricato
+    try:
+        assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
+        assert tokenizer[config.MIDI_SOS_TOKEN_NAME] is not None
+        assert tokenizer[config.MIDI_EOS_TOKEN_NAME] is not None
+    except (AssertionError, KeyError) as e:
+        logging.error(f"CRITICO: Token speciali MIDI (PAD, SOS, EOS) mancanti nel tokenizer caricato: {e}.")
+        raise ValueError("Il tokenizer caricato è corrotto o incompleto (mancano token speciali).")
+
+    logging.info(f"Tokenizer MIDI per RL pronto. Dimensione vocabolario: {len(tokenizer)}")
+    return tokenizer
 
 # ==============================================================================
 # === BLOCCO FUNZIONI PER RL (precedentemente in finetune_generator.py)      ===
@@ -271,34 +307,45 @@ def train_rl(model, optimizer, midi_tokenizer, metadata_vocab_map):
 # --- ESECUZIONE PRINCIPALE ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Esegui il fine-tuning di un modello musicale con Reinforcement Learning.")
-    parser.add_argument("--base_data_dir", type=Path, required=True, help="Percorso della cartella base del dataset (contenente vocab, modelli, ecc.).")
+    parser.add_argument("--base_data_dir", type=Path, required=True, help="Percorso della cartella base del dataset (contenente modelli, ecc.).")
+    
+    # --- MODIFICA: Aggiunti argomenti per specificare i percorsi dei vocabolari ---
+    parser.add_argument("--midi_vocab_path", type=Path, default=None, help="Percorso specifico al file midi_vocab.json. Se non fornito, viene derivato da base_data_dir.")
+    parser.add_argument("--metadata_vocab_path", type=Path, default=None, help="Percorso specifico al file metadata_vocab.json. Se non fornito, viene derivato da base_data_dir.")
+    
     parser.add_argument("--resume_rl_checkpoint", type=Path, default=None, help="Percorso opzionale a un checkpoint RL per riprendere l'addestramento.")
     args = parser.parse_args()
 
-    # --- INIZIO BLOCCO SPOSTATO ---
-    # Questa configurazione ora avviene solo quando lo script viene eseguito,
-    # utilizzando i percorsi forniti dall'utente.
-    
-    # 1. Aggiorna i percorsi globali in base agli argomenti
+    # --- SETUP DEI PERCORSI ---
     BASE_DATA_DIR = args.base_data_dir
     MODEL_SAVE_DIR = BASE_DATA_DIR / "rl_models"
     MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
     
-    # I percorsi dei vocabolari sono dinamici, non più globali all'inizio del file
-    global VOCAB_PATH, METADATA_VOCAB_PATH
-    VOCAB_PATH = BASE_DATA_DIR / "midi_vocab.json"
-    METADATA_VOCAB_PATH = BASE_DATA_DIR / "metadata_vocab.json"
-    
-    # 2. Carica il tokenizer e i vocabolari
-    midi_tokenizer = build_or_load_tokenizer(force_build=False)
-    metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
-    # --- FINE BLOCCO SPOSTATO ---
+    # --- MODIFICA: Logica per determinare i percorsi dei vocabolari ---
+    # Usa il percorso specifico se fornito, altrimenti derivato dalla directory base.
+    MIDI_VOCAB_PATH = args.midi_vocab_path if args.midi_vocab_path else BASE_DATA_DIR / "midi_vocab.json"
+    METADATA_VOCAB_PATH = args.metadata_vocab_path if args.metadata_vocab_path else BASE_DATA_DIR / "metadata_vocab.json"
+
+    logging.info(f"Percorso Vocabolario MIDI in uso: {MIDI_VOCAB_PATH}")
+    logging.info(f"Percorso Vocabolario Metadati in uso: {METADATA_VOCAB_PATH}")
+
+    # --- MODIFICA: Caricamento tokenizer e vocabolari usando le nuove funzioni/logiche ---
+    try:
+        # Chiama la nuova funzione locale `build_or_load_tokenizer_rl`
+        midi_tokenizer = build_or_load_tokenizer_rl(vocab_path=MIDI_VOCAB_PATH)
+        
+        # La funzione `load_metadata_vocab` importata da `training.py` funziona correttamente
+        metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
+    except (FileNotFoundError, IOError, ValueError) as e:
+        logging.error(f"Impossibile inizializzare i componenti necessari. Errore: {e}")
+        sys.exit(1)
 
     # 3. Determina quale checkpoint caricare
     if args.resume_rl_checkpoint and args.resume_rl_checkpoint.exists():
         checkpoint_path = args.resume_rl_checkpoint
         logging.info(f"Ripresa dell'addestramento RL dal checkpoint: {checkpoint_path}")
     else:
+        # Il checkpoint per il fine-tuning dovrebbe essere nella sottocartella 'models', non 'rl_models'
         checkpoint_path = BASE_DATA_DIR / "models" / "transformer_best.pt"
         logging.info(f"Avvio di un nuovo addestramento RL dal modello supervisionato: {checkpoint_path}")
         if not checkpoint_path.exists():
