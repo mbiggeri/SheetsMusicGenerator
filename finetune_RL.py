@@ -132,7 +132,7 @@ def evaluate_adherence(prompt_dict: dict, analysis_dict: dict) -> dict:
 
     return scores
 
-LEARNING_RATE_RL = 1e-6
+LEARNING_RATE_RL = 5e-6
 NUM_EPISODES = 1000
 BATCH_SIZE_RL = 16
 RL_MAX_GEN_TOKENS = 256
