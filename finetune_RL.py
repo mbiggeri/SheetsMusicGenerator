@@ -120,10 +120,21 @@ def evaluate_adherence(prompt_dict: dict, analysis_dict: dict) -> dict:
 
 LEARNING_RATE_RL = 1e-6
 NUM_EPISODES = 1000
-BATCH_SIZE_RL = 4
+BATCH_SIZE_RL = 16
 RL_MAX_GEN_TOKENS = 256
 
 def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadata_prompt_dict, device):
+    """
+    Esegue una generazione completa e calcola un reward "pesato" per prioritizzare l'aderenza.
+    """
+    # --- PESI PER IL REWARD SHAPING ---
+    # Diamo un peso molto alto all'aderenza per renderla l'obiettivo primario.
+    W_ADHERENCE = 2.0  
+    # Diamo un peso basso al bonus di lunghezza, il suo scopo è solo evitare sequenze nulle.
+    W_LENGTH = 0.25
+    LENGTH_BONUS_PER_TOKEN = 0.001
+    # ------------------------------------
+
     metadata_prompt_str_list = tokenize_metadata(metadata_prompt_dict)
     
     gen_config = {
@@ -133,9 +144,7 @@ def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadat
 
     generated_token_ids, log_probs_tensor = generate_multi_chunk_midi(
         model, midi_tokenizer, metadata_vocab_map, metadata_prompt_str_list,
-        # --- MODIFICA CRUCIALE ---
-        total_target_tokens=RL_MAX_GEN_TOKENS, # Usa la nuova costante più corta
-        # --- FINE MODIFICA ---
+        total_target_tokens=RL_MAX_GEN_TOKENS,
         model_chunk_capacity=model_chunk_capacity,
         generation_config=gen_config,
         device=device,
@@ -151,25 +160,38 @@ def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadat
     temp_midi_file = None
     reward = 0.0
     try:
-        # MODIFICA: Correzione della chiamata a decode
         temp_score = midi_tokenizer.decode(generated_token_ids)
         temp_score = enhance_midi_score(temp_score, {}, metadata_prompt_str_list, lambda msg: logging.debug(msg))
+        
         with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tf:
             temp_midi_file = tf.name
             temp_score.dump_midi(temp_midi_file)
+        
         generated_analysis = analyze_generated_midi(Path(temp_midi_file))
+        
+        # --- CALCOLO DEL REWARD PESATO ---
         adherence_scores = evaluate_adherence(metadata_prompt_dict, generated_analysis)
-        reward = adherence_scores.get('overall_adherence', 0.0)
+        
+        base_adherence_score = adherence_scores.get('overall_adherence', 0.0)
+        length_bonus = len(generated_token_ids) * LENGTH_BONUS_PER_TOKEN
+
+        # Applica i pesi per definire le priorità
+        reward = (W_ADHERENCE * base_adherence_score) + (W_LENGTH * length_bonus)
+
+        # Le penalità rimangono un forte disincentivo per i fallimenti totali
         if generated_analysis.get('note_count', 0) < 20:
             reward -= 0.5
         if len(generated_token_ids) < config.MIN_CHUNK_LEN_MIDI:
             reward -= 0.5
+        # --- FINE CALCOLO ---
+
     except Exception as e:
         logging.error(f"Errore durante l'analisi per reward: {e}")
         reward = -1.0
     finally:
         if temp_midi_file and Path(temp_midi_file).exists():
             os.remove(temp_midi_file)
+
     return generated_token_ids, reward, log_probs_tensor
 
 def train_rl(model, optimizer, midi_tokenizer, metadata_vocab_map):
