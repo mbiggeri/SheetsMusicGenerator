@@ -84,28 +84,63 @@ class Seq2SeqTransformer(nn.Module):
             past_len = cache[0]['k'].size(1)
             emb = self.tgt_tok_emb(tgt) * math.sqrt(self.emb_size)
             tgt_emb = emb + self.positional_encoding.pe[:, past_len:past_len + 1]
+            
         new_cache = []
         output = tgt_emb
+        
         for i, layer in enumerate(self.transformer.decoder.layers):
             past_layer_cache = cache[i] if cache is not None else None
-            query, key, value = output, output, output
+            
+            # NOTA: PyTorch >1.11 usa una implementazione C++ per l'attention che è più efficiente
+            # ma richiede che query, key, e value siano lo stesso tensore se non si usa un MHA separato.
+            # Per la nostra logica con cache, è meglio usare l'implementazione "lenta".
+            # La logica qui è già corretta e non usa la versione ottimizzata.
+            
+            # Il 'query' per il self-attention è l'output del layer precedente
+            query = output
+            
+            # Se abbiamo una cache, la stacchiamo dal grafo computazionale per risparmiare memoria
             if past_layer_cache is not None:
-                past_key, past_value = past_layer_cache['k'], past_layer_cache['v']
-                key, value = torch.cat([past_key, key], dim=1), torch.cat([past_value, value], dim=1)
+                # --- INIZIO MODIFICA CRUCIALE ---
+                # .detach() rimuove la storia dei gradienti dalla cache passata,
+                # impedendo l'esplosione della memoria durante la generazione lunga in modalità training.
+                past_key = past_layer_cache['k'].detach()
+                past_value = past_layer_cache['v'].detach()
+                # --- FINE MODIFICA CRUCIALE ---
+
+                # La key e la value correnti vengono calcolate dall'output e concatenate alla cache "staccata"
+                key, value = output, output 
+                key = torch.cat([past_key, key], dim=1)
+                value = torch.cat([past_value, value], dim=1)
+            else:
+                # Al primo passaggio (o senza cache), key e value sono semplicemente l'output
+                key, value = output, output
+
             new_cache.append({'k': key, 'v': value})
+            
             attn_mask = None
             if is_primer_pass:
                 tgt_len = key.size(1)
                 attn_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=tgt.device, dtype=torch.bool), diagonal=1)
+
+            # Eseguiamo il self-attention
             attn_output, _ = layer.self_attn(query, key, value, attn_mask=attn_mask, need_weights=False)
             output = layer.norm1(output + layer.dropout1(attn_output))
+            
+            # Eseguiamo il cross-attention con l'output dell'encoder (memory)
             cross_attn_output, _ = layer.multihead_attn(output, memory, memory, key_padding_mask=memory_key_padding_mask, need_weights=False)
             output = layer.norm2(output + layer.dropout2(cross_attn_output))
+            
+            # Feedforward
             ff_output = layer.linear2(layer.dropout(F.relu(layer.linear1(output))))
             output = layer.norm3(output + layer.dropout3(ff_output))
+            
         logits = self.generator(output)
+        
+        # Se stiamo processando il primer, restituisci solo il logit per l'ULTIMO token
         if is_primer_pass:
             logits = logits[:, -1:, :]
+            
         return logits, new_cache
 
 # --- FUNZIONI DI GENERAZIONE ---

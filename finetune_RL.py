@@ -166,33 +166,37 @@ def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadat
             os.remove(temp_midi_file)
     return generated_token_ids, reward, log_probs_tensor
 
+# --- LOOP DI ADDESTRAMENTO RL (MODIFICATO CON AMP) ---
 def train_rl(model, optimizer, midi_tokenizer, metadata_vocab_map):
     model.train()
     pbar = tqdm(range(NUM_EPISODES), desc="RL Training Episodes")
     batch_rewards = []
     batch_losses = []
 
+    # --- NUOVO: Inizializza il GradScaler per la mixed precision ---
+    # Funziona solo se il device è 'cuda', altrimenti non fa nulla.
+    scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE.type == 'cuda'))
+
     for episode in pbar:
-        # Imposta il modello in modalità valutazione per la generazione
-        model.eval()
-        metadata_prompt_dict = generate_random_metadata_dict(metadata_vocab_map)
-        generated_tokens, reward, log_probs_tensor = get_generation_and_reward(
-            model, midi_tokenizer, metadata_vocab_map, metadata_prompt_dict, DEVICE
-        )
-
-        # Reimposta il modello in modalità addestramento per la backpropagation
-        model.train()
-
-        if generated_tokens is None or log_probs_tensor is None:
-            continue
+        model.eval() # Modalità valutazione per la generazione
         
-        # Calcola la loss solo se il tensore dei log_probs richiede il gradiente
-        if log_probs_tensor.requires_grad:
-            loss = -log_probs_tensor.sum() * reward
-            if len(generated_tokens) > 0:
-                loss = loss / len(generated_tokens)
-            batch_losses.append(loss)
-        
+        # --- NUOVO: Usa il contesto autocast per la generazione e il calcolo della loss ---
+        with torch.cuda.amp.autocast(enabled=(DEVICE.type == 'cuda')):
+            generated_tokens, reward, log_probs_tensor = get_generation_and_reward(
+                model, midi_tokenizer, metadata_vocab_map, metadata_prompt_dict, DEVICE
+            )
+
+            if generated_tokens is None or log_probs_tensor is None:
+                continue
+
+            # Calcola la loss all'interno del contesto autocast
+            if log_probs_tensor.requires_grad:
+                loss = -log_probs_tensor.sum() * reward
+                if len(generated_tokens) > 0:
+                    loss = loss / len(generated_tokens)
+                batch_losses.append(loss)
+
+        model.train() # Reimposta a modalità addestramento
         batch_rewards.append(reward)
 
         if (episode + 1) % BATCH_SIZE_RL == 0:
@@ -203,9 +207,15 @@ def train_rl(model, optimizer, midi_tokenizer, metadata_vocab_map):
 
             total_batch_loss = torch.stack(batch_losses).sum()
             optimizer.zero_grad()
-            total_batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            
+            # --- NUOVO: Usa lo scaler per il backward pass ---
+            scaler.scale(total_batch_loss).backward()
+            
+            # --- NUOVO: Usa lo scaler per l'update dell'ottimizzatore ---
+            scaler.step(optimizer)
+            
+            # --- NUOVO: Aggiorna lo scaler per il prossimo ciclo ---
+            scaler.update()
             
             avg_batch_reward = sum(batch_rewards) / len(batch_rewards)
             pbar.set_postfix({"Avg Reward": f"{avg_batch_reward:.4f}", "Loss": f"{total_batch_loss.item():.4f}"})
