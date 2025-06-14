@@ -1,6 +1,6 @@
-# generate_music.py (versione libreria con callback di progresso, KV CACHING e pulizia MIDI avanzata)
+# generate_music_RL.py (versione aggiornata e corretta)
 import os
-os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"  # for Mac M1 compatibility
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
 import torch
 import torch.nn as nn
@@ -18,7 +18,6 @@ from typing import Optional, List, Dict, Any
 import random
 from collections import defaultdict
 
-# Soppressione di avvisi comuni di miditok
 warnings.filterwarnings("ignore", category=UserWarning, module='miditok.midi_tokenizer_base')
 
 # --- DEFINIZIONI DEL MODELLO (INVARIATE) ---
@@ -108,14 +107,14 @@ class Seq2SeqTransformer(nn.Module):
         if is_primer_pass:
             logits = logits[:, -1:, :]
         return logits, new_cache
-    
+
 # --- FUNZIONI DI GENERAZIONE ---
-def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
-                      max_new_tokens, min_new_tokens, temperature, top_k, device,
-                      primer_token_ids, model_max_pe_len, max_rest_penalty, rest_ids,
-                      rest_penalty_mode='hybrid', # <-- NUOVO PARAMETRO
-                      progress_queue=None, job_id=None):
-    model.eval()
+# MODIFICA: Aggiunto il parametro 'training_mode'
+def _generate_loop(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
+                   max_new_tokens, min_new_tokens, temperature, top_k, device,
+                   primer_token_ids, model_max_pe_len, max_rest_penalty, rest_ids,
+                   rest_penalty_mode, progress_queue, job_id):
+    """Contiene la logica di generazione effettiva, per essere usata con o senza `torch.no_grad`."""
     META_SOS_TOKEN_NAME, META_EOS_TOKEN_NAME, META_UNK_TOKEN_NAME, META_PAD_TOKEN_NAME = "<sos_meta>", "<eos_meta>", "<unk_meta>", "<pad_meta>"
     MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME = "SOS_None", "EOS_None"
     try:
@@ -125,98 +124,106 @@ def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt
         logging.error(f"Token speciale '{e}' non trovato nei vocabolari.")
         raise ValueError(f"Token speciale '{e}' mancante.")
 
-    with torch.no_grad():
-        meta_token_ids = [metadata_vocab_map.get(token, unk_meta_id) for token in metadata_prompt]
-        src_seq = torch.tensor([[sos_meta_id] + meta_token_ids + [eos_meta_id]], dtype=torch.long, device=device)
-        src_padding_mask = (src_seq == meta_pad_id)
-        memory = model.encode(src_seq, src_padding_mask)
-        initial_ids = [sos_midi_id] + (primer_token_ids if primer_token_ids else [])
-        current_tokens = torch.tensor([initial_ids], dtype=torch.long, device=device)
-        generated_ids, cache = [], None
-        log_probs_list = [] # Lista per collezionare le log-probabilità dei token scelti
+    meta_token_ids = [metadata_vocab_map.get(token, unk_meta_id) for token in metadata_prompt]
+    src_seq = torch.tensor([[sos_meta_id] + meta_token_ids + [eos_meta_id]], dtype=torch.long, device=device)
+    src_padding_mask = (src_seq == meta_pad_id)
+    memory = model.encode(src_seq, src_padding_mask)
+    initial_ids = [sos_midi_id] + (primer_token_ids if primer_token_ids else [])
+    current_tokens = torch.tensor([initial_ids], dtype=torch.long, device=device)
+    generated_ids, cache = [], None
+    log_probs_list = []
+
+    if len(initial_ids) > 0:
+        logits, cache = model.decode(current_tokens, memory, memory_key_padding_mask=src_padding_mask)
+        logits = logits[:, -1, :]
+    else:
+        current_tokens = torch.tensor([[sos_midi_id]], dtype=torch.long, device=device)
+        logits, cache = model.decode(current_tokens, memory, memory_key_padding_mask=src_padding_mask)
+
+    for i in range(max_new_tokens):
+        if len(initial_ids) + len(generated_ids) >= model_max_pe_len:
+            logging.warning(f"Raggiunta capacità massima del modello ({model_max_pe_len}). Interruzione.")
+            break
         
-        if len(initial_ids) > 0:
-            logits, cache = model.decode(current_tokens, memory, memory_key_padding_mask=src_padding_mask)
-            logits = logits[:, -1, :]
-        else:
-            current_tokens = torch.tensor([[sos_midi_id]], dtype=torch.long, device=device)
-            logits, cache = model.decode(current_tokens, memory, memory_key_padding_mask=src_padding_mask)
-
-        for i in range(max_new_tokens):
-            if len(initial_ids) + len(generated_ids) >= model_max_pe_len:
-                logging.warning(f"Raggiunta capacità massima del modello ({model_max_pe_len}). Interruzione.")
-                break
-            
-            # --- INIZIO BLOCCO LOGICA PENALITA' MODIFICATO ---
-            if max_rest_penalty > 0 and rest_ids is not None and rest_ids.numel() > 0:
-                progress = i / max_new_tokens
-                current_penalty = 0
-                if rest_penalty_mode == 'constant':
-                    # Applica la penalità massima e costante
-                    current_penalty = max_rest_penalty
-                elif rest_penalty_mode == 'hybrid':
-                    # Applica metà della penalità da subito, e l'altra metà in modo graduale
-                    base_penalty = max_rest_penalty / 2
-                    ramped_penalty = (max_rest_penalty / 2) * progress
-                    current_penalty = base_penalty + ramped_penalty
-                else: # 'ramped' (comportamento originale)
-                    current_penalty = max_rest_penalty * progress
-                
-                logits[:, rest_ids] -= current_penalty
-            # --- FINE BLOCCO LOGICA PENALITA' MODIFICATO ---
-
-            if temperature > 0:
-                scaled_logits = logits / temperature
-                if top_k is not None and top_k > 0:
-                    v, _ = torch.topk(scaled_logits, min(top_k, scaled_logits.size(-1)))
-                    scaled_logits[scaled_logits < v[:, [-1]]] = -float('Inf')
-                probs = F.softmax(scaled_logits, dim=-1)
-                next_token_id_tensor = torch.multinomial(probs, num_samples=1)
+        if max_rest_penalty > 0 and rest_ids is not None and rest_ids.numel() > 0:
+            progress = i / max_new_tokens
+            current_penalty = 0
+            if rest_penalty_mode == 'constant':
+                current_penalty = max_rest_penalty
+            elif rest_penalty_mode == 'hybrid':
+                base_penalty = max_rest_penalty / 2
+                ramped_penalty = (max_rest_penalty / 2) * progress
+                current_penalty = base_penalty + ramped_penalty
             else:
-                next_token_id_tensor = torch.argmax(logits, dim=-1, keepdim=True)
-            
-            # Calcola le log-probabilità prima del campionamento
-            log_probs = F.log_softmax(scaled_logits, dim=-1)
-            
-            # Campiona il prossimo token usando le probabilità (non i logit)
-            probs = F.softmax(scaled_logits, dim=-1)
-            next_token_id_tensor = torch.multinomial(probs, num_samples=1)
-            
-            # Estrai la log-probabilità del token che è stato scelto
-            log_prob_selected = log_probs.gather(1, next_token_id_tensor)
-            log_probs_list.append(log_prob_selected)
+                current_penalty = max_rest_penalty * progress
+            logits[:, rest_ids] -= current_penalty
+        
+        scaled_logits = logits / temperature if temperature > 0 else logits
+        
+        if top_k is not None and top_k > 0:
+            v, _ = torch.topk(scaled_logits, min(top_k, scaled_logits.size(-1)))
+            scaled_logits[scaled_logits < v[:, [-1]]] = -float('Inf')
+        
+        log_probs = F.log_softmax(scaled_logits, dim=-1)
+        probs = F.softmax(scaled_logits, dim=-1)
 
-            next_token_id = next_token_id_tensor.item()
-            generated_ids.append(next_token_id)
-            
-            if next_token_id == eos_midi_id:
-                if len(generated_ids) < min_new_tokens:
-                    _, top_2_indices = torch.topk(probs, 2, dim=-1)
-                    if top_2_indices.size(1) > 1 and top_2_indices[0, 0].item() == eos_midi_id:
-                        next_token_id_tensor = top_2_indices[0, 1].unsqueeze(0).unsqueeze(0)
-                        generated_ids[-1] = next_token_id_tensor.item()
-                    else: break
+        next_token_id_tensor = torch.multinomial(probs, num_samples=1)
+        log_prob_selected = log_probs.gather(1, next_token_id_tensor)
+        log_probs_list.append(log_prob_selected)
+
+        next_token_id = next_token_id_tensor.item()
+        generated_ids.append(next_token_id)
+
+        if next_token_id == eos_midi_id:
+            if len(generated_ids) < min_new_tokens:
+                _, top_2_indices = torch.topk(probs, 2, dim=-1)
+                if top_2_indices.size(1) > 1 and top_2_indices[0, 0].item() == eos_midi_id:
+                    next_token_id_tensor = top_2_indices[0, 1].unsqueeze(0).unsqueeze(0)
+                    generated_ids[-1] = next_token_id_tensor.item()
                 else: break
-            
-            if progress_queue:
-                progress_percentage = ((i + 1) / max_new_tokens) * 100
-                progress_queue.put(("progress", progress_percentage, job_id))
-            
-            logits, cache = model.decode(next_token_id_tensor, memory, memory_key_padding_mask=src_padding_mask, cache=cache)
-            logits = logits.squeeze(1)
-    
-    final_log_probs = torch.cat(log_probs_list).squeeze() if log_probs_list else torch.tensor([], device=device)    
-    return generated_ids, torch.cat(log_probs_list)
+            else: break
+        
+        if progress_queue:
+            progress_percentage = ((i + 1) / max_new_tokens) * 100
+            progress_queue.put(("progress", progress_percentage, job_id))
 
+        logits, cache = model.decode(next_token_id_tensor, memory, memory_key_padding_mask=src_padding_mask, cache=cache)
+        logits = logits.squeeze(1)
+        
+    final_log_probs = torch.cat(log_probs_list).squeeze() if log_probs_list else torch.tensor([], device=device)    
+    return generated_ids, final_log_probs
+
+
+def generate_sequence(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
+                      max_new_tokens, min_new_tokens, temperature, top_k, device,
+                      primer_token_ids, model_max_pe_len, max_rest_penalty, rest_ids,
+                      rest_penalty_mode='hybrid', training_mode=False, # <-- MODIFICA: Aggiunto training_mode
+                      progress_queue=None, job_id=None):
+    model.eval()
+    
+    # MODIFICA: Gestione condizionale del contesto `no_grad`
+    if training_mode:
+        # Esegui senza `no_grad` per permettere il calcolo dei gradienti
+        return _generate_loop(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
+                              max_new_tokens, min_new_tokens, temperature, top_k, device,
+                              primer_token_ids, model_max_pe_len, max_rest_penalty, rest_ids,
+                              rest_penalty_mode, progress_queue, job_id)
+    else:
+        # Comportamento di default per inferenza
+        with torch.no_grad():
+            return _generate_loop(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
+                                  max_new_tokens, min_new_tokens, temperature, top_k, device,
+                                  primer_token_ids, model_max_pe_len, max_rest_penalty, rest_ids,
+                                  rest_penalty_mode, progress_queue, job_id)
+
+
+# MODIFICA: Aggiunto il parametro 'training_mode'
 def generate_multi_chunk_midi(model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
                               total_target_tokens, model_chunk_capacity, generation_config, device,
-                              initial_primer_ids=None, rest_ids=None, progress_queue=None, job_id=None):
+                              initial_primer_ids=None, rest_ids=None, training_mode=False,
+                              progress_queue=None, job_id=None):
     all_generated_tokens = []
-    
-    # ---> INIZIO MODIFICA <---
-    all_log_probs = [] # Lista per collezionare i tensori di log-probabilità da ogni chunk
-    # ---> FINE MODIFICA <---
-
+    all_log_probs = []
     current_primer_ids = initial_primer_ids.copy() if initial_primer_ids else []
     PRIMER_TOKEN_COUNT, MIN_TOKENS_PER_CHUNK = 50, 100
     max_new_tokens_per_chunk = min(2048, model_chunk_capacity - PRIMER_TOKEN_COUNT - 5)
@@ -229,8 +236,7 @@ def generate_multi_chunk_midi(model, midi_tokenizer, metadata_vocab_map, metadat
         if len(current_primer_ids) + current_pass_max_new + 1 > model_chunk_capacity:
             break
         
-        # ---> INIZIO MODIFICA <---
-        # Ora la funzione `generate_sequence` restituisce due valori
+        # MODIFICA: Passa 'training_mode' alla funzione sottostante
         newly_generated_ids, new_log_probs = generate_sequence(
             model, midi_tokenizer, metadata_vocab_map, metadata_prompt,
             max_new_tokens=current_pass_max_new,
@@ -243,18 +249,16 @@ def generate_multi_chunk_midi(model, midi_tokenizer, metadata_vocab_map, metadat
             model_max_pe_len=model_chunk_capacity,
             rest_ids=rest_ids,
             rest_penalty_mode=rest_penalty_mode,
+            training_mode=training_mode,  # <-- Passa il flag
             progress_queue=progress_queue, 
             job_id=job_id                
         )
-        # ---> FINE MODIFICA <---
 
         if not newly_generated_ids:
             break
         
-        # ---> INIZIO MODIFICA <---
         if new_log_probs is not None and new_log_probs.numel() > 0:
             all_log_probs.append(new_log_probs)
-        # ---> FINE MODIFICA <---
 
         chunk_ended_with_eos = eos_midi_id in newly_generated_ids
         tokens_to_add = newly_generated_ids[:newly_generated_ids.index(eos_midi_id) + 1] if chunk_ended_with_eos else newly_generated_ids
@@ -270,13 +274,9 @@ def generate_multi_chunk_midi(model, midi_tokenizer, metadata_vocab_map, metadat
     
     if all_generated_tokens and all_generated_tokens[-1] != eos_midi_id:
         all_generated_tokens.append(eos_midi_id)
-        # Nota: Non aggiungiamo una log_prob per questo EOS aggiunto manualmente, 
-        # perché non è stato generato dal modello. La loss si baserà solo sui token scelti.
 
-    # ---> INIZIO MODIFICA <---
     final_log_probs_tensor = torch.cat(all_log_probs) if all_log_probs else torch.tensor([], device=device)
     return all_generated_tokens, final_log_probs_tensor
-    # ---> FINE MODIFICA <---
 
 # --- FUNZIONE DI ANALISI MODELLO ---
 def get_model_info(model_path: str) -> dict:
