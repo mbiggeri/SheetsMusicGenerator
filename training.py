@@ -43,8 +43,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Iperparametri del Modello e Addestramento
 EPOCHS = 100
-BATCH_SIZE = 64 # Adatta il batch size alla memoria della tua GPU
-ACCUMULATION_STEPS = 1 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
+BATCH_SIZE = 32 # Adatta il batch size alla memoria della tua GPU
+ACCUMULATION_STEPS = 16 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
 LEARNING_RATE = 0.0003
 EMB_SIZE = 256
 NHEAD = 4
@@ -386,10 +386,10 @@ class _LRFCriterionWrapper(torch.nn.Module):
         # Reshape them as expected by the original criterion.
         return self.criterion(model_output.reshape(-1, model_output.shape[-1]), labels.reshape(-1))
 
-def _lr_finder_collate_fn(batch, meta_pad_id, midi_pad_id, device):
+def _lr_finder_collate_fn(batch, meta_pad_id, midi_pad_id):
     """
     Custom collate_fn to package a batch into the (inputs, labels) format
-    that LRFinder expects.
+    that LRFinder expects. Tensors are kept on the CPU.
     """
     # Use the original padding logic
     src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = pad_collate_fn(batch, meta_pad_id, midi_pad_id)
@@ -397,8 +397,7 @@ def _lr_finder_collate_fn(batch, meta_pad_id, midi_pad_id, device):
     if src_padded is None:
         return None, None
 
-    # Move tensors to the correct device
-    src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = [t.to(device) for t in [src_padded, tgt_padded, src_padding_mask, tgt_padding_mask]]
+    # Tensors remain on the CPU. The LRFinder object will move them to the device.
 
     # Prepare model inputs and loss targets from the batch
     tgt_input = tgt_padded[:, :-1]
@@ -429,10 +428,10 @@ def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_sa
     # 2. Create a new DataLoader with the custom collate function
     train_dataset = train_dataloader.dataset
     batch_size = train_dataloader.batch_size
-    lr_finder_collate = partial(_lr_finder_collate_fn, meta_pad_id=meta_pad_id, midi_pad_id=midi_pad_id, device=device)
+    lr_finder_collate = partial(_lr_finder_collate_fn, meta_pad_id=meta_pad_id, midi_pad_id=midi_pad_id)
     
     finder_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
-                                   collate_fn=lr_finder_collate, num_workers=2, drop_last=True)
+                                   collate_fn=lr_finder_collate, num_workers=0, drop_last=True)
 
     # 3. Initialize LRFinder with the wrapped components
     # The optimizer's parameters are already those of the original model, which is correct.
@@ -548,9 +547,9 @@ def main_training_loop(args):
     
     # MODIFICA: DataLoader standard, senza sampler distribuito.
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                  collate_fn=collate_fn_with_padding_ids, num_workers=2, drop_last=True)
+                                  collate_fn=collate_fn_with_padding_ids, num_workers=0, drop_last=True)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                collate_fn=collate_fn_with_padding_ids, num_workers=2, drop_last=True)
+                                collate_fn=collate_fn_with_padding_ids, num_workers=0, drop_last=True)
 
     logging.info("--- Inizializzazione Modello ---")
     if checkpoint and 'model_params' in checkpoint:
@@ -652,6 +651,14 @@ def main_training_loop(args):
     logging.info("--- Addestramento Terminato ---")
 
 if __name__ == "__main__":
+    # Add this block to handle CUDA multiprocessing
+    import torch.multiprocessing as mp
+    if torch.cuda.is_available():
+        try:
+            mp.set_start_method('spawn', force=True)
+        except RuntimeError:
+            pass
+    
     parser = argparse.ArgumentParser(description="Addestra un modello Transformer per la generazione musicale.")
     parser.add_argument("--data_dir", type=Path, required=True, help="Percorso della cartella base del dataset.")
     parser.add_argument("--model_save_dir", type=Path, required=True, help="Percorso per salvare i checkpoint del modello.")
