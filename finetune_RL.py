@@ -95,27 +95,41 @@ def generate_random_metadata_dict(metadata_vocab_map: dict) -> dict:
     return prompt_dict
 
 def evaluate_adherence(prompt_dict: dict, analysis_dict: dict) -> dict:
-    scores = {}
-    total_score = 0
-    num_criteria = 0
+    """
+    Versione modificata che calcola punteggi separati per ogni criterio,
+    rendendo il reward meno "sparso".
+    """
+    scores = {
+        'instrument_score': 0.0,
+        'tempo_score': 0.0,
+        'timesig_score': 0.0,
+    }
+    
     prompt_tokens = set(tokenize_metadata(prompt_dict))
     analysis_tokens = set(tokenize_metadata(analysis_dict))
-    for category in ['TimeSig', 'Tempo', 'NumInst']:
-        prompt_cat_token = next((t for t in prompt_tokens if t.startswith(category)), None)
-        if prompt_cat_token:
-            num_criteria += 1
-            analysis_cat_token = next((t for t in analysis_tokens if t.startswith(category)), None)
-            if prompt_cat_token == analysis_cat_token:
-                total_score += 1.0
+
+    # 1. Punteggio Tempo
+    prompt_tempo = next((t for t in prompt_tokens if t.startswith('Tempo_')), None)
+    if prompt_tempo:
+        analysis_tempo = next((t for t in analysis_tokens if t.startswith('Tempo_')), None)
+        if prompt_tempo == analysis_tempo:
+            scores['tempo_score'] = 1.0
+
+    # 2. Punteggio Time Signature
+    prompt_ts = next((t for t in prompt_tokens if t.startswith('TimeSig=')), None)
+    if prompt_ts:
+        analysis_ts = next((t for t in analysis_tokens if t.startswith('TimeSig=')), None)
+        if prompt_ts == analysis_ts:
+            scores['timesig_score'] = 1.0
+
+    # 3. Punteggio Strumenti (Bonus per ogni strumento corretto)
     prompt_instruments = {t for t in prompt_tokens if t.startswith('Instrument=')}
     if prompt_instruments:
-        num_criteria += 1
         analysis_instruments = {t for t in analysis_tokens if t.startswith('Instrument=')}
-        intersection = len(prompt_instruments.intersection(analysis_instruments))
-        union = len(prompt_instruments.union(analysis_instruments))
-        instrument_score = intersection / union if union > 0 else 0.0
-        total_score += instrument_score
-    scores['overall_adherence'] = total_score / num_criteria if num_criteria > 0 else 0.0
+        correct_instruments = prompt_instruments.intersection(analysis_instruments)
+        # Assegna un bonus per ogni strumento corretto, normalizzato per il numero di strumenti richiesti.
+        scores['instrument_score'] = len(correct_instruments) / len(prompt_instruments)
+
     return scores
 
 LEARNING_RATE_RL = 1e-6
@@ -125,21 +139,18 @@ RL_MAX_GEN_TOKENS = 256
 
 def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadata_prompt_dict, device):
     """
-    Esegue una generazione completa e calcola un reward "pesato" per prioritizzare l'aderenza.
+    Versione modificata che usa i punteggi di reward granulari.
     """
-    # --- PESI PER IL REWARD SHAPING ---
-    # Diamo un peso molto alto all'aderenza per renderla l'obiettivo primario.
-    W_ADHERENCE = 2.0  
-    # Diamo un peso basso al bonus di lunghezza, il suo scopo è solo evitare sequenze nulle.
-    W_LENGTH = 0.25
+    # --- PESI PER I REWARD GRANULARI ---
+    W_INSTRUMENTS = 1.5  # L'aderenza agli strumenti è la più importante
+    W_TEMPO = 0.5        # Anche il tempo è importante
+    W_TIMESIG = 0.5      # E il time signature
+    W_LENGTH = 0.1       # Il bonus di lunghezza ora è un incentivo minore
     LENGTH_BONUS_PER_TOKEN = 0.001
     # ------------------------------------
 
     metadata_prompt_str_list = tokenize_metadata(metadata_prompt_dict)
-    
-    gen_config = {
-        "temperature": 1.0, "top_k": 0, "max_rest_penalty": 0.0, "rest_penalty_mode": 'hybrid'
-    }
+    gen_config = {"temperature": 1.2, "top_k": 0} # Ho già aumentato la temperatura qui
     model_chunk_capacity = model.positional_encoding.pe.size(1)
 
     generated_token_ids, log_probs_tensor = generate_multi_chunk_midi(
@@ -153,43 +164,36 @@ def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadat
         training_mode=True
     )
 
-    if not generated_token_ids or log_probs_tensor is None or log_probs_tensor.numel() == 0:
-        logging.warning("Generazione fallita o vuota, reward = -1.")
+    if not generated_token_ids or log_probs_tensor is None:
         return None, -1.0, None
 
-    temp_midi_file = None
     reward = 0.0
+    temp_midi_file = None
     try:
         temp_score = midi_tokenizer.decode(generated_token_ids)
         temp_score = enhance_midi_score(temp_score, {}, metadata_prompt_str_list, lambda msg: logging.debug(msg))
-        
         with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tf:
             temp_midi_file = tf.name
             temp_score.dump_midi(temp_midi_file)
         
         generated_analysis = analyze_generated_midi(Path(temp_midi_file))
-        
-        # --- CALCOLO DEL REWARD PESATO ---
         adherence_scores = evaluate_adherence(metadata_prompt_dict, generated_analysis)
         
-        base_adherence_score = adherence_scores.get('overall_adherence', 0.0)
-        length_bonus = len(generated_token_ids) * LENGTH_BONUS_PER_TOKEN
+        # Calcola il reward finale usando i pesi
+        reward += adherence_scores.get('instrument_score', 0.0) * W_INSTRUMENTS
+        reward += adherence_scores.get('tempo_score', 0.0) * W_TEMPO
+        reward += adherence_scores.get('timesig_score', 0.0) * W_TIMESIG
+        reward += (len(generated_token_ids) * LENGTH_BONUS_PER_TOKEN) * W_LENGTH
 
-        # Applica i pesi per definire le priorità
-        reward = (W_ADHERENCE * base_adherence_score) + (W_LENGTH * length_bonus)
-
-        # Le penalità rimangono un forte disincentivo per i fallimenti totali
-        if generated_analysis.get('note_count', 0) < 20:
-            reward -= 0.5
-        if len(generated_token_ids) < config.MIN_CHUNK_LEN_MIDI:
-            reward -= 0.5
-        # --- FINE CALCOLO ---
+        # Le penalità rimangono un forte disincentivo
+        if generated_analysis.get('note_count', 0) < 20: reward -= 0.5
+        if len(generated_token_ids) < config.MIN_CHUNK_LEN_MIDI: reward -= 0.5
 
     except Exception as e:
         logging.error(f"Errore durante l'analisi per reward: {e}")
         reward = -1.0
     finally:
-        if temp_midi_file and Path(temp_midi_file).exists():
+        if temp_midi_file and os.path.exists(temp_midi_file):
             os.remove(temp_midi_file)
 
     return generated_token_ids, reward, log_probs_tensor
