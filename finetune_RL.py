@@ -13,6 +13,7 @@ from tqdm import tqdm
 import numpy as np
 import mido
 import argparse
+import gc
 
 from generate_music_RL import Seq2SeqTransformer, generate_multi_chunk_midi, enhance_midi_score
 from tokenize_metadata import tokenize_metadata
@@ -120,22 +121,27 @@ def evaluate_adherence(prompt_dict: dict, analysis_dict: dict) -> dict:
 LEARNING_RATE_RL = 1e-6
 NUM_EPISODES = 1000
 BATCH_SIZE_RL = 4
+RL_MAX_GEN_TOKENS = 256
 
 def get_generation_and_reward(model, midi_tokenizer, metadata_vocab_map, metadata_prompt_dict, device):
     metadata_prompt_str_list = tokenize_metadata(metadata_prompt_dict)
-    gen_config = {"temperature": 1.0, "top_k": 0, "max_rest_penalty": 0.0, "rest_penalty_mode": 'hybrid'}
+    
+    gen_config = {
+        "temperature": 1.0, "top_k": 0, "max_rest_penalty": 0.0, "rest_penalty_mode": 'hybrid'
+    }
     model_chunk_capacity = model.positional_encoding.pe.size(1)
 
-    # MODIFICA: Attivazione della modalità di training per il calcolo dei gradienti
     generated_token_ids, log_probs_tensor = generate_multi_chunk_midi(
         model, midi_tokenizer, metadata_vocab_map, metadata_prompt_str_list,
-        total_target_tokens=config.MAX_SEQ_LEN_MIDI,
+        # --- MODIFICA CRUCIALE ---
+        total_target_tokens=RL_MAX_GEN_TOKENS, # Usa la nuova costante più corta
+        # --- FINE MODIFICA ---
         model_chunk_capacity=model_chunk_capacity,
         generation_config=gen_config,
         device=device,
         initial_primer_ids=None,
         rest_ids=torch.tensor([i for t, i in midi_tokenizer.vocab.items() if t.startswith("Rest_")], device=DEVICE),
-        training_mode=True  # <-- Attiva i gradienti
+        training_mode=True
     )
 
     if not generated_token_ids or log_probs_tensor is None or log_probs_tensor.numel() == 0:
@@ -214,6 +220,14 @@ def train_rl(model, optimizer, midi_tokenizer, metadata_vocab_map):
 
             avg_batch_reward = sum(batch_rewards) / len(batch_rewards)
             pbar.set_postfix({"Avg Reward": f"{avg_batch_reward:.4f}", "Loss": f"{total_batch_loss.item():.4f}"})
+            
+            # --- INIZIO BLOCCO DI PULIZIA AGGIUNTIVO ---
+            del total_batch_loss, batch_losses, batch_rewards
+            batch_rewards = []
+            batch_losses = []
+            gc.collect()
+            torch.cuda.empty_cache()
+            # --- FINE BLOCCO DI PULIZIA ---
 
             batch_rewards.clear()
             batch_losses.clear()
