@@ -33,6 +33,7 @@ import config
 # --- TO RESUME TRAINING (GPU/CPU): ---
 # python training.py --data_dir PATH/TO/DATASET --model_save_dir PATH/TO/SAVE/MODELS --resume_from_checkpoint PATH/TO/transformer_best.pt
 
+# EXAMPLE: python training.py --data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_octuple" --model_save_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets"
 
 # --- Configurazione del logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,14 +44,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Iperparametri del Modello e Addestramento
 EPOCHS = 100
-BATCH_SIZE = 32 # Adatta il batch size alla memoria della tua GPU
-ACCUMULATION_STEPS = 16 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
-LEARNING_RATE = 0.0003
-EMB_SIZE = 256
+BATCH_SIZE = 2 # Adatta il batch size alla memoria della tua GPU
+ACCUMULATION_STEPS = 1 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
+LEARNING_RATE = 0.0001
+EMB_SIZE = 128
 NHEAD = 4
-FFN_HID_DIM = 1024
-NUM_ENCODER_LAYERS = 6
-NUM_DECODER_LAYERS = 6
+FFN_HID_DIM = 512
+NUM_ENCODER_LAYERS = 4
+NUM_DECODER_LAYERS = 4
 DROPOUT = 0.1
 
 # ... (le funzioni `build_or_load_tokenizer`, `load_metadata_vocab`, `MutopiaDataset`, `pad_collate_fn`, `PositionalEncoding` e `Seq2SeqTransformer` rimangono INVARIATE) ...
@@ -158,9 +159,14 @@ class MutopiaDataset(Dataset):
         self.eos_meta_id = metadata_vocab_map[config.META_EOS_TOKEN_NAME]
         self.unk_meta_id = metadata_vocab_map[config.META_UNK_TOKEN_NAME]
 
-        # Per Octuple, SOS/EOS sono tuple di ID, per altri sono singoli int
-        self.sos_midi = self.midi_tokenizer[config.MIDI_SOS_TOKEN_NAME]
-        self.eos_midi = self.midi_tokenizer[config.MIDI_EOS_TOKEN_NAME]
+        # Per Octuple, SOS/EOS devono essere tuple di ID.
+        if self.is_octuple:
+            self.sos_midi = tuple(voc[config.MIDI_SOS_TOKEN_NAME] for voc in self.midi_tokenizer.vocab)
+            self.eos_midi = tuple(voc[config.MIDI_EOS_TOKEN_NAME] for voc in self.midi_tokenizer.vocab)
+        else: # Per i tokenizer standard, sono singoli int
+            self.sos_midi = self.midi_tokenizer[config.MIDI_SOS_TOKEN_NAME]
+            self.eos_midi = self.midi_tokenizer[config.MIDI_EOS_TOKEN_NAME]
+
 
         logging.info(f"Inizializzazione Dataset. Rilevato tokenizer Octuple: {self.is_octuple}")
         self.samples = []
@@ -543,13 +549,16 @@ def main_training_loop(args):
     # Prepariamo tutti gli "ingredienti" specifici per la strategia scelta.
     if is_octuple:
         logging.info("Configurazione per la strategia Octuple...")
-        # Carica le dimensioni dei s-vocabolari di Octuple
+        # Carica le dimensioni dei sotto-vocabolari di Octuple
         MIDI_VOCAB_SIZES_PATH = config.get_project_paths(DATA_DIR)["midi_vocab_sizes"]
         tgt_vocab_sizes = load_octuple_vocab_sizes(MIDI_VOCAB_SIZES_PATH)
         vocab_names_ordered = list(tgt_vocab_sizes.keys())
         
-        # L'ID di PAD per Octuple è una tupla
-        MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
+        # --- CORREZIONE APPLICATA QUI ---
+        # Costruisci manualmente la tupla degli ID di padding iterando su ogni sotto-vocabolario.
+        # midi_tokenizer.vocab per Octuple è una lista di dizionari (uno per ogni dimensione).
+        MIDI_PAD_ID = tuple(voc[config.MIDI_PAD_TOKEN_NAME] for voc in midi_tokenizer.vocab)
+        logging.info(f"ID di padding per Octuple costruito correttamente: {MIDI_PAD_ID}")
         
         # Scegli la classe del modello e la funzione collate corrette
         ModelClass = Seq2SeqTransformerOctuple

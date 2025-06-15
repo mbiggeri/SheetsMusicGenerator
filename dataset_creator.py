@@ -82,7 +82,7 @@ python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_da
 '''
 
 # --- EXAMPLE --------------------------------------------
-# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi" --transpose-to-C --piano_only --fast --min_token_freq 1500
+# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi_octuple" --transpose-to-C --piano_only --force_tokenizer_build --fast --min_token_freq 1500
 # --------------------------------------------------------
 
 # --- Additions for Tokenization and Chunking ---
@@ -191,69 +191,73 @@ def check_file_validity(args_tuple):
 # --- Funzione per costruire o caricare il tokenizer MIDI ---
 def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, force_build=False):
     """
-    Costruisce o carica il tokenizer MIDI utilizzando la configurazione centralizzata
-    da config.py e gestisce correttamente l'addestramento e il salvataggio dei
-    file specifici per la strategia (es. dimensioni vocabolario per Octuple).
+    Costruisce o carica il tokenizer MIDI, gestendo correttamente la creazione
+    dei file di vocabolario specifici per la strategia (es. Octuple).
     """
+    # Nota: Assicurati che 'args' sia accessibile o passa 'base_data_dir' come argomento.
+    # Per coerenza con il tuo script, assumo che 'args' sia una variabile globale.
     paths = config.get_project_paths(args.base_data_dir)
     VOCAB_PATH = paths["midi_vocab"]
     tokenizer = None
 
+    # --- RAMO 1: Carica un tokenizer esistente ---
     if VOCAB_PATH.exists() and not force_build:
-        logging.info(f"Caricamento del tokenizer MIDI da {VOCAB_PATH}")
+        logging.info(f"Caricamento configurazione tokenizer MIDI da {VOCAB_PATH}")
         try:
-            # La warning sui "controls" qui è normale, la libreria ci avvisa che li disabilita
             tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
             logging.info(f"Tokenizer caricato con successo da {VOCAB_PATH}")
         except Exception as e:
-            logging.error(f"Errore durante il caricamento del tokenizer da {VOCAB_PATH}: {e}", exc_info=True)
-            force_build = True
+            logging.error(f"Errore nel caricare il tokenizer da {VOCAB_PATH}: {e}. Tento la ricostruzione.", exc_info=True)
+            # Rimuovi il file corrotto per forzare la ricostruzione alla prossima esecuzione
+            if VOCAB_PATH.exists():
+                VOCAB_PATH.unlink()
+            return build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build, True)
 
-    if not VOCAB_PATH.exists() or force_build:
+    else:
+        # --- RAMO 2: Costruisci un nuovo tokenizer da zero (LOGICA CORRETTA) ---
         logging.info("Creazione di una nuova configurazione per il tokenizer MIDI...")
         tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=config.TOKENIZER_PARAMS)
-
-        # --- MODIFICA: Chiama .train() solo se il tokenizer lo supporta ---
-        if midi_file_paths_for_vocab_build and hasattr(tokenizer, 'train'):
-            logging.info(f"Addestramento del tokenizer con {len(midi_file_paths_for_vocab_build)} file.")
-            tokenizer.train(
-                vocab_size=50000,
-                model="BPE",
-                files_paths=midi_file_paths_for_vocab_build
-            )
-            logging.info("Addestramento del tokenizer completato.")
-        elif midi_file_paths_for_vocab_build:
-            logging.info(f"Il tokenizer {type(tokenizer).__name__} non richiede addestramento, salto il passaggio.")
-        # --- FINE MODIFICA ---
         
-        VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # L'inizializzazione sopra ha già creato il vocabolario in memoria.
+        logging.info("Tokenizer e vocabolario interno creati con successo.")
+
+        # Ora che l'oggetto 'tokenizer' è corretto, possiamo salvare i file ausiliari
+        # che leggeranno la struttura corretta dall'oggetto.
+        is_octuple = isinstance(tokenizer, miditok.Octuple)
+        if is_octuple:
+            VOCAB_SIZES_PATH = paths.get("midi_vocab_sizes")
+            if VOCAB_SIZES_PATH:
+                logging.info("Rilevata strategia Octuple, salvataggio delle dimensioni del vocabolario...")
+                # Usiamo la proprietà .vocab (che ora funziona in lettura) per ottenere le dimensioni
+                vocab_sizes_list = [len(sub_list) for sub_list in tokenizer.vocab]
+                vocab_names = list(tokenizer.vocab_types_idx.keys())
+                vocab_sizes_dict = {name: size for name, size in zip(vocab_names, vocab_sizes_list)}
+                try:
+                    with open(VOCAB_SIZES_PATH, 'w', encoding='utf-8') as f:
+                        json.dump(vocab_sizes_dict, f, ensure_ascii=False, indent=2)
+                    logging.info(f"File delle dimensioni del vocabolario Octuple salvato in {VOCAB_SIZES_PATH}")
+                except Exception as e:
+                    logging.error(f"Errore durante il salvataggio del file delle dimensioni: {e}", exc_info=True)
+                    return None
+        
+        # Infine, salviamo il file di configurazione principale del tokenizer.
+        logging.info(f"Salvataggio della configurazione tokenizer MIDI in {VOCAB_PATH}")
         tokenizer.save(str(VOCAB_PATH))
-        logging.info(f"Configurazione del tokenizer salvata in {VOCAB_PATH}")
 
-    if isinstance(tokenizer, miditok.Octuple):
-        VOCAB_SIZES_PATH = paths.get("midi_vocab_sizes")
-        if VOCAB_SIZES_PATH:
-            logging.info("Rilevata strategia Octuple, salvataggio delle dimensioni del vocabolario.")
-            vocab_sizes = tokenizer.vocab_size # Corretto in vocab_size (singolare)
-            try:
-                VOCAB_SIZES_PATH.parent.mkdir(parents=True, exist_ok=True)
-                with open(VOCAB_SIZES_PATH, 'w', encoding='utf-8') as f:
-                    json.dump(vocab_sizes, f, ensure_ascii=False, indent=2)
-                logging.info(f"Dimensioni del vocabolario Octuple salvate in {VOCAB_SIZES_PATH}")
-            except Exception as e:
-                logging.error(f"Errore durante il salvataggio del file delle dimensioni del vocabolario Octuple in {VOCAB_SIZES_PATH}: {e}")
-        else:
-            logging.warning("Percorso 'midi_vocab_sizes' non definito in config.py. Impossibile salvare le dimensioni del vocabolario.")
+    # Se il tokenizer non è stato creato con successo, esci
+    if tokenizer is None:
+        return None
 
+    # Controlli di validità finali
+    logging.info(f"Dimensione vocabolario MIDI (dopo caricamento/costruzione): {len(tokenizer)}")
     try:
         assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
         assert tokenizer[config.MIDI_SOS_TOKEN_NAME] is not None
         assert tokenizer[config.MIDI_EOS_TOKEN_NAME] is not None
     except AssertionError:
         logging.error("CRITICO: Token speciali MIDI mancanti nel tokenizer.")
-        raise ValueError("Token speciali MIDI mancanti nel tokenizer.")
-
-    logging.info(f"Tokenizer MIDI pronto. Dimensione vocabolario: {len(tokenizer)}")
+        return None
+        
     return tokenizer
 
 # --- Funzioni di Analisi (mido) ---
