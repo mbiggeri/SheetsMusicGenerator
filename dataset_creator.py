@@ -82,7 +82,7 @@ python dataset_creator.py --base_data_dir /percorso/alla/tua/cartella/mutopia_da
 '''
 
 # --- EXAMPLE --------------------------------------------
-# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\The_Magic_of_MIDI_1024" --fast --transpose-to-C --min_token_freq 1500
+# python dataset_creator.py --base_data_dir "C:\Users\Michael\Desktop\MusicDatasets\Datasets\adl_piano_midi" --transpose-to-C --piano_only --fast --min_token_freq 1500
 # --------------------------------------------------------
 
 # --- Additions for Tokenization and Chunking ---
@@ -192,16 +192,17 @@ def check_file_validity(args_tuple):
 def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, force_build=False):
     """
     Costruisce o carica il tokenizer MIDI utilizzando la configurazione centralizzata
-    da config.py e gestisce correttamente l'addestramento solo per i tokenizer supportati.
+    da config.py e gestisce correttamente l'addestramento e il salvataggio dei
+    file specifici per la strategia (es. dimensioni vocabolario per Octuple).
     """
-    # Utilizza direttamente la configurazione definita in config.py
-    tokenizer_params = config.TOKENIZER_PARAMS
-
-    VOCAB_PATH = config.get_project_paths(args.base_data_dir)["midi_vocab"]
+    paths = config.get_project_paths(args.base_data_dir)
+    VOCAB_PATH = paths["midi_vocab"]
+    tokenizer = None
 
     if VOCAB_PATH.exists() and not force_build:
         logging.info(f"Caricamento del tokenizer MIDI da {VOCAB_PATH}")
         try:
+            # La warning sui "controls" qui è normale, la libreria ci avvisa che li disabilita
             tokenizer = config.MIDI_TOKENIZER_STRATEGY(params=str(VOCAB_PATH))
             logging.info(f"Tokenizer caricato con successo da {VOCAB_PATH}")
         except Exception as e:
@@ -210,20 +211,39 @@ def build_or_load_tokenizer_for_creator(midi_file_paths_for_vocab_build=None, fo
 
     if not VOCAB_PATH.exists() or force_build:
         logging.info("Creazione di una nuova configurazione per il tokenizer MIDI...")
-        tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=tokenizer_params)
+        tokenizer = config.MIDI_TOKENIZER_STRATEGY(tokenizer_config=config.TOKENIZER_PARAMS)
 
-        if midi_file_paths_for_vocab_build:
+        # --- MODIFICA: Chiama .train() solo se il tokenizer lo supporta ---
+        if midi_file_paths_for_vocab_build and hasattr(tokenizer, 'train'):
             logging.info(f"Addestramento del tokenizer con {len(midi_file_paths_for_vocab_build)} file.")
             tokenizer.train(
-                vocab_size=50000, 
-                model="BPE", 
+                vocab_size=50000,
+                model="BPE",
                 files_paths=midi_file_paths_for_vocab_build
             )
             logging.info("Addestramento del tokenizer completato.")
+        elif midi_file_paths_for_vocab_build:
+            logging.info(f"Il tokenizer {type(tokenizer).__name__} non richiede addestramento, salto il passaggio.")
+        # --- FINE MODIFICA ---
         
         VOCAB_PATH.parent.mkdir(parents=True, exist_ok=True)
         tokenizer.save(str(VOCAB_PATH))
         logging.info(f"Configurazione del tokenizer salvata in {VOCAB_PATH}")
+
+    if isinstance(tokenizer, miditok.Octuple):
+        VOCAB_SIZES_PATH = paths.get("midi_vocab_sizes")
+        if VOCAB_SIZES_PATH:
+            logging.info("Rilevata strategia Octuple, salvataggio delle dimensioni del vocabolario.")
+            vocab_sizes = tokenizer.vocab_size # Corretto in vocab_size (singolare)
+            try:
+                VOCAB_SIZES_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(VOCAB_SIZES_PATH, 'w', encoding='utf-8') as f:
+                    json.dump(vocab_sizes, f, ensure_ascii=False, indent=2)
+                logging.info(f"Dimensioni del vocabolario Octuple salvate in {VOCAB_SIZES_PATH}")
+            except Exception as e:
+                logging.error(f"Errore durante il salvataggio del file delle dimensioni del vocabolario Octuple in {VOCAB_SIZES_PATH}: {e}")
+        else:
+            logging.warning("Percorso 'midi_vocab_sizes' non definito in config.py. Impossibile salvare le dimensioni del vocabolario.")
 
     try:
         assert tokenizer[config.MIDI_PAD_TOKEN_NAME] is not None
@@ -599,20 +619,17 @@ def process_single_file(args_tuple):
                 # Applica il filtro allo score
                 score.tracks = filtered_tracks
 
-            # Ora lo score è "pulito" e pronto per la tokenizzazione
-            midi_tokens_output = MIDI_TOKENIZER(score)
+            # --- NUOVA LOGICA DI ESTRAZIONE DEI TOKEN (SEMPLIFICATA) ---
+            # Grazie a one_token_stream_for_programs=True, il tokenizer ora restituisce
+            # sempre un singolo oggetto TokSequence.
+            tokens_sequence = MIDI_TOKENIZER(score)
 
-            raw_midi_ids = []
-            if hasattr(midi_tokens_output, 'ids') and isinstance(midi_tokens_output.ids, list):
-                if all(isinstance(sublist, list) for sublist in midi_tokens_output.ids):
-                    raw_midi_ids = [item for sublist in midi_tokens_output.ids for item in sublist]
-                elif all(isinstance(item, int) for item in midi_tokens_output.ids):
-                    raw_midi_ids = midi_tokens_output.ids
-                else:
-                    return [{'status': 'skipped_midi_tokenization_unexpected_format', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
-            else:
-                 return [{'status': 'skipped_midi_tokenization_invalid_output', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name}]
-
+            # La proprietà .ids ci fornisce direttamente i token nel formato corretto:
+            # - Per Octuple: una lista di liste di int (es. [[t1_p, t1_v], [t2_p, t2_v]])
+            # - Per altri tokenizer (es. REMI): una lista di int (es. [t1, t2, t3])
+            raw_midi_ids = tokens_sequence.ids
+            # --- FINE NUOVA LOGICA ---
+            
             if not raw_midi_ids or len(raw_midi_ids) < config.MIN_CHUNK_LEN_MIDI:
                 return [{'status': 'skipped_too_short_after_tokenization', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(raw_midi_ids)}]
 
@@ -631,21 +648,14 @@ def process_single_file(args_tuple):
                          return [{'status': 'skipped_first_chunk_too_short', 'skipped_path': str(midi_file_path), 'filename': midi_file_path.name, 'token_count': len(chunk_token_ids)}]
                     break
 
-                # Calcola il percorso relativo del file MIDI rispetto alla cartella di input principale
                 relative_path_str = midi_file_path.relative_to(midi_input_dir).as_posix()
-                
-                # --- VECCHIA LOGICA DA SOSTITUIRE ---
-                # safe_path_id = re.sub(r'[^a-zA-Z0-9_-]', '_', relative_path_str)
-                
-                # --- NUOVA LOGICA ROBUSTA ---
-                # Crea un hash del percorso relativo originale per garantire un ID unico.
                 path_hash = hashlib.sha1(relative_path_str.encode('utf-8')).hexdigest()
-                
-                # Combina lo stem originale (per leggibilità) con l'hash (per unicità)
                 safe_path_id = f"{midi_file_path.stem}_{path_hash}"
                 chunk_id = f"{safe_path_id}_chunk{num_file_chunks}"
                 binary_file_path = binary_chunks_dir / f"{chunk_id}.npy"
-                token_array = np.array(chunk_token_ids, dtype=np.uint16) 
+                
+                # np.array gestirà correttamente sia le liste 1D (REMI) che 2D (Octuple)
+                token_array = np.array(chunk_token_ids, dtype=np.uint16)
 
                 try:
                     binary_chunks_dir.mkdir(parents=True, exist_ok=True)
@@ -714,6 +724,18 @@ def init_worker(vocab_p, midi_tok_strat_class):
         logging.error(f"Worker {os.getpid()} failed to initialize tokenizer: {e}", exc_info=True)
         MIDI_TOKENIZER = None
 
+def _worker_wrapper_for_calibration(init_args_tuple, process_args_tuple):
+    """
+    Wrapper per i processi di calibrazione: prima inizializza il worker,
+    poi esegue la funzione di elaborazione del file.
+    """
+    # Chiama l'inizializzatore del worker per creare MIDI_TOKENIZER
+    init_worker(init_args_tuple[0], init_args_tuple[1])
+    
+    # Esegui la funzione di elaborazione del file
+    # Nota: non ci interessa il risultato, serve solo per misurare la memoria
+    process_single_file(process_args_tuple)
+
 def determine_optimal_workers(all_midi_paths, processing_args_template, safety_factor=0.85, sample_size=10):
     """
     Determina il numero ottimale di processi worker basandosi sulla RAM disponibile
@@ -730,27 +752,34 @@ def determine_optimal_workers(all_midi_paths, processing_args_template, safety_f
     sample_files = random.sample(all_midi_paths, min(sample_size, len(all_midi_paths)))
     peak_memory_usage = 0
 
+    # --- MODIFICA: Prepara gli argomenti per l'inizializzatore del worker ---
+    init_args_for_worker = (VOCAB_PATH, config.MIDI_TOKENIZER_STRATEGY)
+    
     for i, midi_file in enumerate(sample_files):
         # Prepara gli argomenti per questa specifica elaborazione
-        args_tuple = (midi_file,) + processing_args_template[1:]
+        args_tuple_for_processing = (midi_file,) + processing_args_template[1:]
         
-        # Lancia un singolo processo per monitorarlo
-        process = multiprocessing.Process(target=process_single_file, args=(args_tuple,))
+        # --- MODIFICA: Usa la funzione wrapper che inizializza il tokenizer ---
+        process = multiprocessing.Process(
+            target=_worker_wrapper_for_calibration,
+            args=(init_args_for_worker, args_tuple_for_processing)
+        )
+        # --- FINE MODIFICA ---
+        
         process.start()
         
         p = psutil.Process(process.pid)
         local_peak = 0
         while process.is_alive():
             try:
-                # RSS: Resident Set Size, una buona misura della memoria reale usata
                 mem_info = p.memory_info().rss
                 if mem_info > local_peak:
                     local_peak = mem_info
             except psutil.NoSuchProcess:
-                break # Il processo è terminato
+                break
             time.sleep(0.1)
         
-        process.join() # Assicurati che il processo sia terminato
+        process.join()
         logging.info(f"Campione {i+1}/{sample_size}: Picco di memoria rilevato: {local_peak / 1024**2:.2f} MB")
         if local_peak > peak_memory_usage:
             peak_memory_usage = local_peak
@@ -759,24 +788,20 @@ def determine_optimal_workers(all_midi_paths, processing_args_template, safety_f
         logging.warning("Impossibile misurare l'uso di memoria. Ritorno un valore di default di 2 workers.")
         return 2
 
-    # Aggiungiamo un buffer di sicurezza del 25% alla stima
     memory_per_worker_estimate = peak_memory_usage * 1.25
     logging.info(f"Stima memoria per worker (con buffer del 25%): {memory_per_worker_estimate / 1024**2:.2f} MB")
 
-    # 2. Controllo della RAM totale disponibile in WSL
     total_wsl_memory = psutil.virtual_memory().total
     available_for_workers = total_wsl_memory * safety_factor
     logging.info(f"RAM totale in WSL: {total_wsl_memory / 1024**2:.2f} MB. RAM utilizzabile per i workers ({safety_factor*100}%): {available_for_workers / 1024**2:.2f} MB")
 
-    # 3. Calcolo del numero di workers
     num_cpu_cores = os.cpu_count()
     
-    if memory_per_worker_estimate == 0: # Evita divisione per zero
+    if memory_per_worker_estimate == 0:
         calculated_workers = num_cpu_cores
     else:
         calculated_workers = int(available_for_workers / memory_per_worker_estimate)
     
-    # Prendi il valore più basso tra i core della CPU e i workers calcolati, ma almeno 1.
     optimal_workers = max(1, min(num_cpu_cores, calculated_workers))
 
     logging.info(f"Numero di core CPU disponibili: {num_cpu_cores}")
@@ -1056,27 +1081,33 @@ if __name__ == "__main__":
         logging.error("Nessun file MIDI trovato. Uscita.")
         exit(1)
 
-    # --- FASE 0: PRE-FILTRAGGIO DEI FILE MIDI ---
-    logging.info("--- Fase 0: Pre-filtraggio dei file per garantire la validità ---")
-    
+    # --- FASE 0: PRE-FILTRAGGIO DEI FILE MIDI (Eseguito solo in modalità --fast) ---
     valid_midi_files_for_processing = []
-    pre_filter_tasks = [(path, args.transpose_enabled) for path in all_potential_midi_files]
-    num_workers_prefilter = max(1, os.cpu_count() - 1)
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers_prefilter) as executor:
-        results_iterator = executor.map(check_file_validity, pre_filter_tasks)
+    if args.fast:
+        logging.info("--- Fase 0: Pre-filtraggio dei file per garantire la validità (modalità --fast attiva) ---")
         
-        progress_bar = tqdm(results_iterator, total=len(all_potential_midi_files), desc="Pre-filtraggio file", unit="file")
-        
-        for result_path in progress_bar:
-            if result_path is not None:
-                valid_midi_files_for_processing.append(result_path)
+        pre_filter_tasks = [(path, args.transpose_enabled) for path in all_potential_midi_files]
+        num_workers_prefilter = max(1, os.cpu_count() - 1)
 
-    logging.info(f"Pre-filtraggio completato. {len(valid_midi_files_for_processing)} su {len(all_potential_midi_files)} file sono risultati validi per l'elaborazione.")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers_prefilter) as executor:
+            results_iterator = executor.map(check_file_validity, pre_filter_tasks)
+            
+            progress_bar = tqdm(results_iterator, total=len(all_potential_midi_files), desc="Pre-filtraggio file", unit="file")
+            
+            for result_path in progress_bar:
+                if result_path is not None:
+                    valid_midi_files_for_processing.append(result_path)
 
-    if not valid_midi_files_for_processing:
-        logging.error("Nessun file MIDI valido trovato dopo il pre-filtraggio. Uscita.")
-        exit(1)
+        logging.info(f"Pre-filtraggio completato. {len(valid_midi_files_for_processing)} su {len(all_potential_midi_files)} file sono risultati validi per l'elaborazione.")
+
+        if not valid_midi_files_for_processing:
+            logging.error("Nessun file MIDI valido trovato dopo il pre-filtraggio. Uscita.")
+            exit(1)
+    else:
+        # Se non siamo in modalità --fast, saltiamo il pre-filtraggio. 
+        # I file verranno controllati singolarmente durante l'elaborazione principale.
+        logging.info("Modalità --fast non attiva. Salto del pre-filtraggio.")
+        valid_midi_files_for_processing = all_potential_midi_files
 
     # --- FASE 0.5: COSTRUZIONE VOCABOLARIO TOKENIZER MIDI (ORA SUI FILE VALIDI) ---
     temp_midi_files_for_vocab = []
@@ -1084,7 +1115,7 @@ if __name__ == "__main__":
         logging.info("Preparazione campione per vocabolario tokenizer MIDI dai file validi...")
         
         # Usa la logica di campionamento che abbiamo già definito, ma sulla lista filtrata
-        SAMPLE_PERCENTAGE = 0.20 
+        SAMPLE_PERCENTAGE = 0.2
         MAX_SAMPLE_SIZE = 50000
         total_valid_files = len(valid_midi_files_for_processing)
         sample_size = min(int(total_valid_files * SAMPLE_PERCENTAGE), MAX_SAMPLE_SIZE, total_valid_files)

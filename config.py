@@ -14,8 +14,8 @@ PIANO_PROGRAMS = list(range(0, 8))
 # --- IMPOSTAZIONI DEL TOKENIZER MIDI ---
 # =============================================================================
 
-# Strategia di tokenizzazione da usare (es. miditok.REMI, miditok.TSD, etc.)
-MIDI_TOKENIZER_STRATEGY = miditok.REMI
+# Strategia di tokenizzazione da usare (es. miditok.REMI, miditok.TSD, miditok.Octuple, etc.)
+MIDI_TOKENIZER_STRATEGY = miditok.Octuple
 
 # Nomi dei token speciali per il tokenizer MIDI
 MIDI_PAD_TOKEN_NAME = "PAD_None"
@@ -23,21 +23,30 @@ MIDI_SOS_TOKEN_NAME = "SOS_None"
 MIDI_EOS_TOKEN_NAME = "EOS_None"
 MIDI_UNK_TOKEN_NAME = "UNK_None"
 
-# QUESTA CONFIGURAZIONE ABILITA REMI+
+# Octuple gestisce le tracce e il tempo in modo intrinseco.
+# La sua logica si basa su note raggruppate per tempo, quindi
+# alcuni parametri di REMI+ non sono più necessari o vengono ignorati.
 TOKENIZER_PARAMS = miditok.TokenizerConfig(
     special_tokens=[MIDI_PAD_TOKEN_NAME, MIDI_SOS_TOKEN_NAME, MIDI_EOS_TOKEN_NAME, MIDI_UNK_TOKEN_NAME],
+    use_programs=True,          # Fondamentale per Octuple, per distinguere le tracce.
+    use_velocities=True,        # Octuple usa la velocity come una delle sue "dimensioni".
+    use_tempos=True,            # Octuple usa il tempo come una delle sue "dimensioni".
+    use_time_signatures=True,   # Octuple usa il time signature come una delle sue "dimensioni".
     
-    # PARAMETRI CHE DEFINISCONO REMI+
-    use_programs=True,                  # Abilita i token Program per gestire gli strumenti.
-    one_token_stream_for_programs=False, # Gestisce le tracce in un unico flusso, come richiesto da REMI+.
-    use_time_signatures=True,           # Abilita i token per i cambi di tempo (Time Signature).
+    # --- Impostazione chiave: DISABILITIAMO I REST ESPLICITI ---
+    use_rests=False,
+    
+    # --- AGGIUNGI QUESTA RIGA ---
+    # Aumenta il numero massimo di battute che il tokenizer può gestire.
+    # MusicBERT originale usava 256, possiamo partire da lì o aumentarlo.
+    max_bar_embedding=1024,  # Puoi scegliere 256, 512 o anche 1024
 
-    # Altri parametri consigliati per una rappresentazione ricca
-    use_velocities=True,
-    use_chords=True,
-    use_tempos=True,
-    use_rests=True,
-    use_controls=False
+    # Parametri non usati da Octuple ma che possiamo lasciare per coerenza
+    use_chords=False,
+    use_controls=False,
+    
+    # Octuple ha un modo specifico di gestire le tracce, questo parametro non è rilevante.
+    one_token_stream_for_programs=True
 )
 
 # =============================================================================
@@ -90,6 +99,7 @@ def get_project_paths(base_data_dir: Path):
         "binary_chunks": base_data_dir / "dataset_splits" / "binary_chunks",
         "log_file": base_data_dir / "dataset_processing.log",
         "midi_vocab": base_data_dir / "midi_vocab.json",
+        "midi_vocab_sizes": base_data_dir / "midi_vocab_sizes.json", # <-- AGGIUNTO per Octuple
         "metadata_vocab": base_data_dir / "metadata_vocab.json",
         "metadata_frequency": base_data_dir / "metadata_frequency.json",
         "model_save": base_data_dir / "models" # Aggiunto un percorso di default per i modelli

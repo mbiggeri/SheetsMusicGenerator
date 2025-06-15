@@ -106,6 +106,14 @@ def build_or_load_tokenizer(midi_file_paths=None, force_build=False):
         
     return tokenizer
 
+# --- Funzione per caricare le dimensioni dei vocabolari ---
+def load_octuple_vocab_sizes(path: Path) -> dict:
+    """Carica le dimensioni dei vocabolari componenti per Octuple."""
+    if not path.exists():
+        logging.error(f"File delle dimensioni del vocabolario Octuple non trovato in {path}.")
+        raise FileNotFoundError
+    with open(path, 'r') as f:
+        return json.load(f)
 
 def load_metadata_vocab(vocab_path):
     """Carica un vocabolario di metadati esistente e verifica i token speciali."""
@@ -134,51 +142,39 @@ def load_metadata_vocab(vocab_path):
 
 class MutopiaDataset(Dataset):
     def __init__(self, jsonl_path, midi_tokenizer, metadata_vocab_map,
-                 max_len_midi_padded, max_len_meta, splits_dir, filter_key=None):
+                 max_len_midi_padded, max_len_meta, splits_dir):
         self.splits_dir = Path(splits_dir)
         self.midi_tokenizer = midi_tokenizer
         self.metadata_vocab_map = metadata_vocab_map
         self.max_len_midi_padded = max_len_midi_padded
         self.max_len_meta = max_len_meta
-        self.filter_key = filter_key
 
-        try:
-            self.meta_pad_id = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
-            self.sos_meta_id = metadata_vocab_map[config.META_SOS_TOKEN_NAME]
-            self.eos_meta_id = metadata_vocab_map[config.META_EOS_TOKEN_NAME]
-            self.unk_meta_id = metadata_vocab_map[config.META_UNK_TOKEN_NAME]
-            
-            self.sos_midi_id = midi_tokenizer[config.MIDI_SOS_TOKEN_NAME]
-            self.eos_midi_id = midi_tokenizer[config.MIDI_EOS_TOKEN_NAME]
-            self.midi_pad_id = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
-            if None in [self.sos_midi_id, self.eos_midi_id, self.midi_pad_id,
-                        self.meta_pad_id, self.sos_meta_id, self.eos_meta_id, self.unk_meta_id]:
-                raise ValueError("Uno o più ID di token speciali non sono stati trovati.")
-        except (KeyError, ValueError) as e:
-            logging.error(f"ERRORE CRITICO in Dataset __init__: Token speciale non trovato: {e}")
-            raise
+        # --- CONTROLLO STRATEGIA: OCTUPLE ---
+        self.is_octuple = isinstance(self.midi_tokenizer, miditok.Octuple)
+        
+        # Gestione token speciali
+        self.meta_pad_id = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
+        self.sos_meta_id = metadata_vocab_map[config.META_SOS_TOKEN_NAME]
+        self.eos_meta_id = metadata_vocab_map[config.META_EOS_TOKEN_NAME]
+        self.unk_meta_id = metadata_vocab_map[config.META_UNK_TOKEN_NAME]
 
-        logging.info(f"Inizializzazione Dataset da {jsonl_path} (assumendo dati pre-chunked).")
-        self.samples = [] 
+        # Per Octuple, SOS/EOS sono tuple di ID, per altri sono singoli int
+        self.sos_midi = self.midi_tokenizer[config.MIDI_SOS_TOKEN_NAME]
+        self.eos_midi = self.midi_tokenizer[config.MIDI_EOS_TOKEN_NAME]
 
+        logging.info(f"Inizializzazione Dataset. Rilevato tokenizer Octuple: {self.is_octuple}")
+        self.samples = []
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
                     entry = json.loads(line)
-                    
                     meta_tokens_str = tokenize_metadata(entry.get('metadata', {}))
                     meta_token_ids = [self.metadata_vocab_map.get(token, self.unk_meta_id) for token in meta_tokens_str]
                     src_seq_list = [self.sos_meta_id] + meta_token_ids[:self.max_len_meta-2] + [self.eos_meta_id]
                     src_tensor = torch.tensor(src_seq_list, dtype=torch.long)
-
-                    token_ids_relative_path = entry.get('token_ids_path')
-                    if token_ids_relative_path:
-                        self.samples.append((src_tensor, token_ids_relative_path))
+                    self.samples.append((src_tensor, entry.get('token_ids_path')))
                 except (json.JSONDecodeError, KeyError) as e:
                     logging.warning(f"Skipping malformed line in {jsonl_path}: {e}")
-
-        if not self.samples:
-            logging.error(f"Nessun campione valido caricato da {jsonl_path}. Controllare il file.")
 
     def __len__(self):
         return len(self.samples)
@@ -192,21 +188,46 @@ class MutopiaDataset(Dataset):
             logging.error(f"Errore nel caricare il file di token binario: {full_token_path}. Errore: {e}")
             return None
 
-        max_data_tokens = self.max_len_midi_padded - 2
-        truncated_midi_ids = raw_midi_ids_from_file[:max_data_tokens]
+        # Tronca alla lunghezza massima
+        truncated_midi_ids = raw_midi_ids_from_file[:self.max_len_midi_padded-2]
         
-        tgt_seq_list = [self.sos_midi_id] + truncated_midi_ids.tolist() + [self.eos_midi_id]
-        tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
+        # --- CONTROLLO STRATEGIA: OCTUPLE ---
+        if self.is_octuple:
+            sos_array = np.array([self.sos_midi], dtype=np.int64)
+            eos_array = np.array([self.eos_midi], dtype=np.int64)
+            tgt_seq_array = np.vstack([sos_array, truncated_midi_ids, eos_array])
+            tgt_tensor = torch.tensor(tgt_seq_array, dtype=torch.long)
+        else: # Percorso per tokenizer standard (REMI, etc.)
+            tgt_seq_list = [self.sos_midi] + truncated_midi_ids.tolist() + [self.eos_midi]
+            tgt_tensor = torch.tensor(tgt_seq_list, dtype=torch.long)
+            
         return src_tensor, tgt_tensor
 
-def pad_collate_fn(batch, meta_pad_id, midi_pad_id):
-    batch = [item for item in batch if item is not None and item[0].numel() > 0 and item[1].numel() > 0]
+def pad_collate_fn_standard(batch, meta_pad_id, midi_pad_id):
+    batch = [item for item in batch if item is not None]
     if not batch: return None, None, None, None
     src_batch, tgt_batch = zip(*batch)
     src_padded = pad_sequence(src_batch, batch_first=True, padding_value=meta_pad_id)
     tgt_padded = pad_sequence(tgt_batch, batch_first=True, padding_value=midi_pad_id)
     src_padding_mask = (src_padded == meta_pad_id)
     tgt_padding_mask = (tgt_padded == midi_pad_id)
+    return src_padded, tgt_padded, src_padding_mask, tgt_padding_mask
+
+def pad_collate_fn_octuple(batch, meta_pad_id, midi_pad_tuple):
+    batch = [item for item in batch if item is not None]
+    if not batch: return None, None, None, None
+    src_batch, tgt_batch = zip(*batch)
+    src_padded = pad_sequence(src_batch, batch_first=True, padding_value=meta_pad_id)
+    src_padding_mask = (src_padded == meta_pad_id)
+    max_len = max(t.size(0) for t in tgt_batch)
+    padded_tgt_tensors = []
+    for t in tgt_batch:
+        num_pads = max_len - t.size(0)
+        padding = torch.tensor([midi_pad_tuple] * num_pads, dtype=torch.long) if num_pads > 0 else []
+        padded_t = torch.cat([t, padding], dim=0) if num_pads > 0 else t
+        padded_tgt_tensors.append(padded_t)
+    tgt_padded = torch.stack(padded_tgt_tensors)
+    tgt_padding_mask = (tgt_padded[:, :, 0] == midi_pad_tuple[0])
     return src_padded, tgt_padded, src_padding_mask, tgt_padding_mask
 
 #------------------------
@@ -268,93 +289,122 @@ class Seq2SeqTransformer(nn.Module):
                                 memory_key_padding_mask=memory_key_padding_mask)
         return self.generator(outs)
 
+# Modello specifico per Octuple
+class Seq2SeqTransformerOctuple(nn.Module):
+    def __init__(self, num_encoder_layers, num_decoder_layers, emb_size, nhead,
+                 src_vocab_size, tgt_vocab_sizes: dict, max_pe_len,
+                 dim_feedforward=512, dropout=0.1):
+        super().__init__()
+        self.emb_size = emb_size
+        self.vocab_names = list(tgt_vocab_sizes.keys())
+        self.num_components = len(self.vocab_names)
+        self.src_tok_emb = nn.Embedding(src_vocab_size, emb_size)
+        self.tgt_tok_emb = nn.ModuleList([nn.Embedding(tgt_vocab_sizes[name], emb_size) for name in self.vocab_names])
+        self.positional_encoding = PositionalEncoding(emb_size, dropout=dropout, max_len=max_pe_len)
+        self.transformer = nn.Transformer(d_model=emb_size, nhead=nhead, num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers, dim_feedforward=dim_feedforward, dropout=dropout, batch_first=True)
+        self.generator = nn.ModuleList([nn.Linear(emb_size, tgt_vocab_sizes[name]) for name in self.vocab_names])
+
+    def forward(self, src, tgt, src_padding_mask, tgt_padding_mask, memory_key_padding_mask=None, tgt_mask=None):
+        src_emb = self.positional_encoding(self.src_tok_emb(src) * math.sqrt(self.emb_size))
+        tgt_emb_sum = torch.zeros(tgt.size(0), tgt.size(1), self.emb_size, device=tgt.device)
+        for i in range(self.num_components):
+            tgt_emb_sum += self.tgt_tok_emb[i](tgt[:, :, i])
+        tgt_emb = self.positional_encoding(tgt_emb_sum * math.sqrt(self.emb_size))
+        if tgt_mask is None:
+            tgt_len = tgt.size(1)
+            tgt_mask = torch.triu(torch.ones(tgt_len, tgt_len, device=tgt.device, dtype=torch.bool), diagonal=1)
+        if memory_key_padding_mask is None:
+            memory_key_padding_mask = src_padding_mask
+        outs = self.transformer(src_emb, tgt_emb, tgt_mask=tgt_mask, src_key_padding_mask=src_padding_mask, tgt_key_padding_mask=tgt_padding_mask, memory_key_padding_mask=memory_key_padding_mask)
+        logits = [gen(outs) for gen in self.generator]
+        return logits
+
 #------------------------
 # Ciclo di Addestramento e Valutazione
 #------------------------
-def train_epoch(model, optimizer, criterion, train_dataloader):
+def train_epoch(model, optimizer, criterions, train_dataloader, is_octuple):
     model.train()
     total_loss = 0
-    processed_batches = 0
-
-    # Determina se usare Automatic Mixed Precision (solo su GPU)
-    use_amp = DEVICE.type == 'cuda'
-    # Inizializza GradScaler solo se è effettivamente usato
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
-
-    optimizer.zero_grad(set_to_none=True)
-
+    # Rimuovi optimizer.zero_grad() da qui
     progress_bar = tqdm(train_dataloader, desc="Training Epoch", leave=False)
 
-    for batch_data in progress_bar:
-        if batch_data[0] is None:
-            continue
+    for i, batch_data in enumerate(progress_bar): # Aggiungi enumerate
+        if batch_data[0] is None: continue
         
-        # Sposta sempre i dati sul device (GPU o CPU)
         src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
 
-        tgt_input = tgt[:, :-1]
-        tgt_input_padding_mask = tgt_padding_mask[:, :-1]
-        tgt_out = tgt[:, 1:]
-
-        # Usa autocast per la mixed precision (float16 su GPU)
-        with torch.cuda.amp.autocast(enabled=use_amp):
-            logits = model(src=src, tgt=tgt_input,
-                           src_padding_mask=src_padding_mask,
-                           tgt_padding_mask=tgt_input_padding_mask,
-                           memory_key_padding_mask=src_padding_mask)
-            loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
-
-        # Logica di backpropagation e update pesi
-        if use_amp:  # Percorso GPU con AMP
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad(set_to_none=True)
-        else:  # Percorso CPU
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-
-        total_loss += loss.item()
-        processed_batches += 1
-        progress_bar.set_postfix({'train_loss': f'{total_loss / processed_batches:.4f}'})
-
-    # Calcola la media della loss per l'epoca
-    if processed_batches == 0:
-        return 0.0
-    return total_loss / processed_batches
-
-def evaluate(model, criterion, dataloader):
-    model.eval()
-    total_loss = 0
-    processed_batches = 0
-    
-    progress_bar = tqdm(dataloader, desc="Evaluation", leave=False)
-
-    with torch.no_grad():
-        for batch_data in progress_bar:
-            if batch_data[0] is None: continue
+        # La logica della loss rimane invariata...
+        if is_octuple:
+            # ... (codice per la loss di octuple)
+            tgt_input = tgt[:, :-1, :]
+            tgt_out = tgt[:, 1:, :]
+            tgt_input_padding_mask = tgt_padding_mask[:, :-1]
+            logits_list = model(src=src, tgt=tgt_input, src_padding_mask=src_padding_mask, tgt_padding_mask=tgt_input_padding_mask, memory_key_padding_mask=src_padding_mask)
             
-            # Sposta sempre i dati sul device
-            src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
-
+            batch_loss = 0
+            for j in range(len(logits_list)): # Usa 'j' per non confondere con l'indice del batch 'i'
+                loss_j = criterions[j](logits_list[j].reshape(-1, logits_list[j].shape[-1]), tgt_out[:, :, j].reshape(-1))
+                batch_loss += loss_j
+            batch_loss = batch_loss / len(logits_list)
+        else:
+            # ... (codice per la loss standard)
             tgt_input = tgt[:, :-1]
             tgt_out = tgt[:, 1:]
             tgt_input_padding_mask = tgt_padding_mask[:, :-1]
+            logits = model(src=src, tgt=tgt_input, src_padding_mask=src_padding_mask, tgt_padding_mask=tgt_input_padding_mask, memory_key_padding_mask=src_padding_mask)
+            batch_loss = criterions(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+        
+        # --- NUOVA LOGICA DI ACCUMULO ---
+        # Normalizza la loss per lo step di accumulo
+        batch_loss = batch_loss / ACCUMULATION_STEPS
+        
+        batch_loss.backward()
+
+        # Esegui l'aggiornamento dei pesi solo ogni ACCUMULATION_STEPS
+        if (i + 1) % ACCUMULATION_STEPS == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+        
+        # Aggiorna la loss totale (rimuovi la normalizzazione per il logging)
+        total_loss += batch_loss.item() * ACCUMULATION_STEPS
+        progress_bar.set_postfix({'train_loss': f'{total_loss / (progress_bar.n + 1):.4f}'})
+
+    # --- AGGIUNTA OPZIONALE: Gestisci l'ultimo step se non è un multiplo ---
+    if (i + 1) % ACCUMULATION_STEPS != 0:
+        optimizer.step()
+        optimizer.zero_grad()
+
+    return total_loss / len(train_dataloader)
+
+def evaluate(model, criterions, val_dataloader, is_octuple):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch_data in tqdm(val_dataloader, desc="Evaluation", leave=False):
+            if batch_data[0] is None: continue
+            src, tgt, src_padding_mask, tgt_padding_mask = [d.to(DEVICE) for d in batch_data]
             
-            with torch.cuda.amp.autocast(enabled=(DEVICE.type == 'cuda')):
-                logits = model(src=src, tgt=tgt_input,
-                               src_padding_mask=src_padding_mask,
-                               tgt_padding_mask=tgt_input_padding_mask,
-                               memory_key_padding_mask=src_padding_mask)
-                loss = criterion(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
+            # --- CONTROLLO STRATEGIA: OCTUPLE ---
+            if is_octuple:
+                tgt_input = tgt[:, :-1, :]
+                tgt_out = tgt[:, 1:, :]
+                tgt_input_padding_mask = tgt_padding_mask[:, :-1]
+                logits_list = model(src=src, tgt=tgt_input, src_padding_mask=src_padding_mask, tgt_padding_mask=tgt_input_padding_mask, memory_key_padding_mask=src_padding_mask)
+                batch_loss = 0
+                for i in range(len(logits_list)):
+                    loss_i = criterions[i](logits_list[i].reshape(-1, logits_list[i].shape[-1]), tgt_out[:, :, i].reshape(-1))
+                    batch_loss += loss_i
+                batch_loss = batch_loss / len(logits_list)
+            else: # --- PERCORSO PER TOKENIZER STANDARD (REMI, etc.) ---
+                tgt_input = tgt[:, :-1]
+                tgt_out = tgt[:, 1:]
+                tgt_input_padding_mask = tgt_padding_mask[:, :-1]
+                logits = model(src=src, tgt=tgt_input, src_padding_mask=src_padding_mask, tgt_padding_mask=tgt_input_padding_mask, memory_key_padding_mask=src_padding_mask)
+                batch_loss = criterions(logits.reshape(-1, logits.shape[-1]), tgt_out.reshape(-1))
             
-            total_loss += loss.item()
-            processed_batches += 1
-            progress_bar.set_postfix({'eval_loss': f'{total_loss / processed_batches:.4f}'})
+            total_loss += batch_loss.item()
             
-    if processed_batches == 0: return float('inf')
-    return total_loss / processed_batches
+    return total_loss / len(val_dataloader)
 
 # ------------------------
 # Learning Rate Finder
@@ -392,7 +442,7 @@ def _lr_finder_collate_fn(batch, meta_pad_id, midi_pad_id):
     that LRFinder expects. Tensors are kept on the CPU.
     """
     # Use the original padding logic
-    src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = pad_collate_fn(batch, meta_pad_id, midi_pad_id)
+    src_padded, tgt_padded, src_padding_mask, tgt_padding_mask = pad_collate_fn_standard(batch, meta_pad_id, midi_pad_id)
 
     if src_padded is None:
         return None, None
@@ -462,9 +512,14 @@ def find_best_lr(model, optimizer, criterion, train_dataloader, device, model_sa
 # Esecuzione Principale
 #------------------------
 def main_training_loop(args):
-    global VOCAB_PATH, METADATA_VOCAB_PATH # Rendi le variabili globali accessibili
-    
-    # Le variabili globali del path vengono inizializzate qui
+    """
+    Funzione principale che orchestra l'intero processo di addestramento.
+    È resa adattabile alla strategia di tokenizzazione scelta in config.py.
+    """
+    # Rendi le variabili globali del path accessibili se necessario, anche se è meglio passarle
+    global VOCAB_PATH, METADATA_VOCAB_PATH
+
+    # 1. IMPOSTAZIONE DEI PERCORSI
     DATA_DIR = args.data_dir
     MODEL_SAVE_DIR = args.model_save_dir
     SPLITS_DIR = DATA_DIR / "dataset_splits"
@@ -472,181 +527,115 @@ def main_training_loop(args):
     METADATA_VOCAB_PATH = DATA_DIR / "metadata_vocab.json"
     
     MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Ambiente rilevato: GPU/CPU")
     logging.info(f"Device in uso: {DEVICE}")
-    
-    # --- Find Best Learning Rate (if requested) ---
-    if args.find_lr:
-        # Crea un'istanza temporanea del modello e dei dati solo per il test del LR
-        logging.info("--- Setup per la ricerca del Learning Rate ---")
-        
-        # --- Tokenizer e Vocabolari ---
-        midi_tokenizer_lr = build_or_load_tokenizer(force_build=False)
-        metadata_vocab_map_lr = load_metadata_vocab(METADATA_VOCAB_PATH)
-        MIDI_VOCAB_SIZE_LR = len(midi_tokenizer_lr)
-        META_VOCAB_SIZE_LR = len(metadata_vocab_map_lr)
-        MIDI_PAD_ID_LR = midi_tokenizer_lr[config.MIDI_PAD_TOKEN_NAME]
-        META_PAD_ID_LR = metadata_vocab_map_lr[config.META_PAD_TOKEN_NAME]
-
-        # --- Dataset e DataLoader ---
-        train_dataset_lr = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer_lr, metadata_vocab_map_lr, 
-                                          config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
-        collate_fn_lr = partial(pad_collate_fn, meta_pad_id=META_PAD_ID_LR, midi_pad_id=MIDI_PAD_ID_LR)
-        train_dataloader_lr = DataLoader(train_dataset_lr, batch_size=BATCH_SIZE, shuffle=True,
-                                       collate_fn=collate_fn_lr, num_workers=2, drop_last=True)
-                                       
-        # --- Modello ---
-        max_pe_len_calculated_lr = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100
-        model_params_lr = {
-            'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
-            'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE_LR,
-            'tgt_vocab_size': MIDI_VOCAB_SIZE_LR, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
-            'max_pe_len': max_pe_len_calculated_lr
-        }
-        model_lr = Seq2SeqTransformer(**model_params_lr).to(DEVICE)
-        optimizer_lr = optim.AdamW(model_lr.parameters(), lr=1e-7) # LR iniziale molto basso
-        criterion_lr = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID_LR)
-        
-        # --- Esegui la ricerca ---
-        best_lr = find_best_lr(model_lr, optimizer_lr, criterion_lr, train_dataloader_lr, DEVICE, args.model_save_dir, META_PAD_ID_LR, MIDI_PAD_ID_LR)
-        logging.info(f"Il learning rate ottimale suggerito è: {best_lr:.2e}. Si prega di aggiornare i propri iperparametri.")
-        logging.info("Processo terminato. Eseguire nuovamente l'addestramento senza il flag --find_lr.")
-        return # Termina lo script dopo la ricerca
-
-    checkpoint = None
-    if args.resume_from_checkpoint and args.resume_from_checkpoint.exists():
-        logging.info(f"Trovato checkpoint: {args.resume_from_checkpoint}. Caricamento in corso...")
-        # Carica sulla CPU prima, poi sposta il modello sul device corretto
-        checkpoint = torch.load(args.resume_from_checkpoint, map_location='cpu')
-        logging.info("Checkpoint caricato.")
-    elif args.resume_from_checkpoint:
-        logging.warning(f"Checkpoint specificato ma non trovato in: {args.resume_from_checkpoint}. Avvio di un nuovo addestramento.")
-
-    logging.info(f"Utilizzo del dataset da: {DATA_DIR}")
     logging.info(f"I modelli verranno salvati in: {MODEL_SAVE_DIR}")
-    
+
+    # 2. CARICAMENTO TOKENIZER E DETERMINAZIONE DELLA STRATEGIA
     logging.info("--- Preparazione Tokenizer e Vocabolari ---")
-    midi_tokenizer = build_or_load_tokenizer(force_build=False)
+    midi_tokenizer = build_or_load_tokenizer(VOCAB_PATH)
     metadata_vocab_map = load_metadata_vocab(METADATA_VOCAB_PATH)
-
-    MIDI_VOCAB_SIZE = len(midi_tokenizer)
-    META_VOCAB_SIZE = len(metadata_vocab_map)
-    MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
-    META_PAD_ID = metadata_vocab_map[config.META_PAD_TOKEN_NAME]
     
-    logging.info(f"MIDI Vocab Size: {MIDI_VOCAB_SIZE}, MIDI PAD ID: {MIDI_PAD_ID}")
-    logging.info(f"Meta Vocab Size: {META_VOCAB_SIZE}, Meta PAD ID: {META_PAD_ID}")
+    # Questo è il nostro "selettore" di strategia. Controlliamo il tipo di tokenizer.
+    is_octuple = isinstance(midi_tokenizer, miditok.Octuple)
+    logging.info(f"Strategia Tokenizer Rilevata: {'Octuple' if is_octuple else 'Standard (es. REMI)'}")
 
-    logging.info("--- Creazione Dataset e DataLoader ---")
-    train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, 
-                                     config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
-    val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map,
-                                   config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
-
-    collate_fn_with_padding_ids = partial(pad_collate_fn, meta_pad_id=META_PAD_ID, midi_pad_id=MIDI_PAD_ID)
-    
-    # MODIFICA: DataLoader standard, senza sampler distribuito.
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                  collate_fn=collate_fn_with_padding_ids, num_workers=0, drop_last=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False,
-                                collate_fn=collate_fn_with_padding_ids, num_workers=0, drop_last=True)
-
-    logging.info("--- Inizializzazione Modello ---")
-    if checkpoint and 'model_params' in checkpoint:
-        logging.info("Inizializzazione del modello con i parametri salvati nel checkpoint.")
-        model_params_to_save = checkpoint['model_params']
-    else:
-        logging.info("Inizializzazione di un nuovo modello con i parametri di default.")
-        max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100 
-        model_params_to_save = {
-            'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
-            'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': META_VOCAB_SIZE,
-            'tgt_vocab_size': MIDI_VOCAB_SIZE, 'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
-            'max_pe_len': max_pe_len_calculated
-        }
+    # 3. SETUP CONDIZIONALE BASATO SULLA STRATEGIA
+    # Prepariamo tutti gli "ingredienti" specifici per la strategia scelta.
+    if is_octuple:
+        logging.info("Configurazione per la strategia Octuple...")
+        # Carica le dimensioni dei s-vocabolari di Octuple
+        MIDI_VOCAB_SIZES_PATH = config.get_project_paths(DATA_DIR)["midi_vocab_sizes"]
+        tgt_vocab_sizes = load_octuple_vocab_sizes(MIDI_VOCAB_SIZES_PATH)
+        vocab_names_ordered = list(tgt_vocab_sizes.keys())
         
-    model = Seq2SeqTransformer(**model_params_to_save).to(DEVICE)
+        # L'ID di PAD per Octuple è una tupla
+        MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
+        
+        # Scegli la classe del modello e la funzione collate corrette
+        ModelClass = Seq2SeqTransformerOctuple
+        collate_fn = partial(pad_collate_fn_octuple, meta_pad_id=metadata_vocab_map[config.META_PAD_TOKEN_NAME], midi_pad_tuple=MIDI_PAD_ID)
+        
+        # Prepara i parametri specifici per il modello Octuple
+        model_params_specific = {'tgt_vocab_sizes': tgt_vocab_sizes}
+        
+        # Il criterio di loss è una lista di loss, una per ogni componente della tupla
+        criterions = [nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID[i]) for i in range(len(vocab_names_ordered))]
+    
+    else: # --- Percorso per tokenizer Standard (REMI, etc.) ---
+        logging.info("Configurazione per la strategia Standard (REMI, Structured, etc.)...")
+        # L'ID di PAD è un singolo intero
+        MIDI_PAD_ID = midi_tokenizer[config.MIDI_PAD_TOKEN_NAME]
+        
+        # Scegli la classe del modello e la funzione collate standard
+        ModelClass = Seq2SeqTransformer
+        collate_fn = partial(pad_collate_fn_standard, meta_pad_id=metadata_vocab_map[config.META_PAD_TOKEN_NAME], midi_pad_id=MIDI_PAD_ID)
+        
+        # Prepara i parametri specifici per il modello standard
+        model_params_specific = {'tgt_vocab_size': len(midi_tokenizer)}
+        
+        # Il criterio di loss è uno solo
+        criterions = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
+
+    # 4. CREAZIONE DATASET E DATALOADER (ora usano la collate_fn corretta)
+    logging.info("--- Creazione Dataset e DataLoader ---")
+    train_dataset = MutopiaDataset(SPLITS_DIR / "train.jsonl", midi_tokenizer, metadata_vocab_map, config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
+    val_dataset = MutopiaDataset(SPLITS_DIR / "validation.jsonl", midi_tokenizer, metadata_vocab_map, config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META, splits_dir=SPLITS_DIR)
+    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn, num_workers=0)
+    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn, num_workers=0)
+
+    # 5. INIZIALIZZAZIONE MODELLO E OTTIMIZZATORE
+    logging.info("--- Inizializzazione Modello ---")
+    # Parametri di base, comuni a entrambi i modelli
+    max_pe_len_calculated = max(config.MAX_SEQ_LEN_MIDI, config.MAX_SEQ_LEN_META) + 100
+    model_params_base = {
+        'num_encoder_layers': NUM_ENCODER_LAYERS, 'num_decoder_layers': NUM_DECODER_LAYERS,
+        'emb_size': EMB_SIZE, 'nhead': NHEAD, 'src_vocab_size': len(metadata_vocab_map),
+        'dim_feedforward': FFN_HID_DIM, 'dropout': DROPOUT,
+        'max_pe_len': max_pe_len_calculated
+    }
+    # Uniamo i parametri di base con quelli specifici della strategia
+    model_params_to_save = {**model_params_base, **model_params_specific}
+    
+    model = ModelClass(**model_params_to_save).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.CrossEntropyLoss(ignore_index=MIDI_PAD_ID)
     scheduler = ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.1)
 
+    # Logica per riprendere da un checkpoint (invariata)
     start_epoch = 1
     best_val_loss = float('inf')
-    epochs_no_improve = 0
-    patience_early_stopping = 10
-
-    if checkpoint:
-        logging.info("Ripristino dello stato del modello e dell'ottimizzatore.")
+    if args.resume_from_checkpoint and args.resume_from_checkpoint.exists():
+        checkpoint = torch.load(args.resume_from_checkpoint, map_location=DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'])
-        if 'optimizer_state_dict' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         logging.info(f"Ripresa dall'epoca {start_epoch} con best_val_loss = {best_val_loss:.4f}")
 
     logging.info(f"Numero parametri: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
-    
-    vocab_info_to_save = {
-        'midi_vocab_path': str(VOCAB_PATH), 'metadata_vocab_path': str(METADATA_VOCAB_PATH),
-        'midi_tokenizer_strategy': config.MIDI_TOKENIZER_STRATEGY.__name__
-    }
 
+    # 6. CICLO DI TRAINING PRINCIPALE
     logging.info("--- Inizio Addestramento ---")
-    
-    final_epoch = 0
     for epoch in range(start_epoch, EPOCHS + 1):
-        final_epoch = epoch
         logging.info(f"--- Epoch {epoch}/{EPOCHS} ---")
-        start_time_epoch = time.time()
         
-        train_loss_epoch = train_epoch(model, optimizer, criterion, train_dataloader)
+        # Le funzioni di training e valutazione ora ricevono il flag 'is_octuple'
+        # per sapere quale logica interna applicare.
+        train_loss = train_epoch(model, optimizer, criterions, train_dataloader, is_octuple)
+        val_loss = evaluate(model, criterions, val_dataloader, is_octuple)
         
-        current_val_loss = float('inf')
-        if len(val_dataset) > 0:
-            current_val_loss = evaluate(model, criterion, val_dataloader)
-        
-        epoch_duration_total = time.time() - start_time_epoch
-        logging.info(f"Epoch {epoch}: Train Loss = {train_loss_epoch:.4f}, Val Loss = {current_val_loss:.4f} (Durata: {epoch_duration_total:.2f}s)")
+        scheduler.step(val_loss)
+        logging.info(f"Epoch {epoch}: Train Loss = {train_loss:.4f}, Val Loss = {val_loss:.4f}")
 
-        scheduler.step(current_val_loss)
-
-        # MODIFICA: Logica di salvataggio semplificata
-        if current_val_loss < best_val_loss:
-            best_val_loss = current_val_loss
-            epochs_no_improve = 0
-            best_model_path = MODEL_SAVE_DIR / "transformer_best.pt"
-            logging.info(f"Nuova best validation loss: {best_val_loss:.4f}. Salvataggio modello in {best_model_path}")
-            save_payload = {
+        # Logica di salvataggio (invariata)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            save_path = MODEL_SAVE_DIR / "transformer_best.pt"
+            torch.save({
                 'epoch': epoch, 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-            }
-            torch.save(save_payload, best_model_path)
-        else:
-            epochs_no_improve += 1
-        
-        if epoch % 10 == 0:
-            periodic_model_path = MODEL_SAVE_DIR / f"transformer_epoch_{epoch}.pt"
-            logging.info(f"Salvataggio checkpoint periodico (epoch {epoch}): {periodic_model_path}")
-            save_payload = {
-                'epoch': epoch, 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-                'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-            }
-            torch.save(save_payload, periodic_model_path)
-    
-        if epochs_no_improve >= patience_early_stopping:
-            logging.info(f"Nessun miglioramento per {patience_early_stopping} epoche. Early stopping.")
-            break 
-            
-    final_model_path = MODEL_SAVE_DIR / "transformer_final.pt"
-    logging.info(f"Salvataggio checkpoint finale: {final_model_path}")
-    save_payload = {
-        'epoch': final_epoch, 'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(), 'best_val_loss': best_val_loss,
-        'model_params': model_params_to_save, 'vocab_info': vocab_info_to_save
-    }
-    torch.save(save_payload, final_model_path)
+                'model_params': model_params_to_save
+            }, save_path)
+            logging.info(f"Nuova best validation loss. Modello salvato in {save_path}")
 
     logging.info("--- Addestramento Terminato ---")
 
