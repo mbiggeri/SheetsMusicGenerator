@@ -44,7 +44,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Iperparametri del Modello e Addestramento
 EPOCHS = 100
-BATCH_SIZE = 2 # Adatta il batch size alla memoria della tua GPU
+BATCH_SIZE = 64 # Adatta il batch size alla memoria della tua GPU
 ACCUMULATION_STEPS = 1 # Puoi aumentarlo se il BATCH_SIZE è troppo grande per la memoria
 LEARNING_RATE = 0.0001
 EMB_SIZE = 128
@@ -365,6 +365,9 @@ def train_epoch(model, optimizer, criterions, train_dataloader, is_octuple):
         batch_loss = batch_loss / ACCUMULATION_STEPS
         
         batch_loss.backward()
+        
+        # Limita la norma dei gradienti per prevenire l'esplosione e stabilizzare il training.
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         # Esegui l'aggiornamento dei pesi solo ogni ACCUMULATION_STEPS
         if (i + 1) % ACCUMULATION_STEPS == 0:
