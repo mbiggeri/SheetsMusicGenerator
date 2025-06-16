@@ -86,16 +86,16 @@ def generate_random_metadata_dict(metadata_vocab_map: dict, only_piano: bool = F
     # --- 1. Popola le liste di token disponibili dal vocabolario ---
     instrument_pool = []
     if only_piano:
-        piano_family_range = range(0, 8)
+        # CORREZIONE: Filtra i token in base al nome, non a un program number
         for token in metadata_vocab_map.keys():
             if token.startswith('Instrument='):
-                try:
-                    prog_num = int(token.split('=')[1])
-                    if prog_num in piano_family_range:
-                        instrument_pool.append(token)
-                except (ValueError, IndexError):
-                    continue
+                # Estrai il nome dello strumento
+                instrument_name = token.split('=')[1]
+                # Controlla se è un tipo di pianoforte in base al nome
+                if 'piano' in instrument_name.lower():
+                    instrument_pool.append(token)
     else:
+        # Questo blocco era già corretto
         instrument_pool = [t for t in metadata_vocab_map.keys() if t.startswith('Instrument=')]
 
     timesig_pool = [t for t in metadata_vocab_map.keys() if t.startswith('TimeSig=')]
