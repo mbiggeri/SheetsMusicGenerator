@@ -77,8 +77,14 @@ def build_or_load_tokenizer_octuple_rl(vocab_path: Path):
     return tokenizer
 
 def generate_random_metadata_dict(metadata_vocab_map: dict, only_piano: bool = False) -> dict:
-    # Questa funzione rimane identica a prima
+    """
+    Genera un dizionario di metadati casuale per creare un prompt di generazione.
+    *** VERSIONE ROBUSTA CHE GARANTISCE UN PROMPT COMPLETO ***
+    """
     categorized_tokens = {'TimeSig': [], 'Tempo': [], 'Instrument': []}
+    
+    # --- 1. Popola le liste di token disponibili dal vocabolario ---
+    instrument_pool = []
     if only_piano:
         piano_family_range = range(0, 8)
         for token in metadata_vocab_map.keys():
@@ -86,24 +92,46 @@ def generate_random_metadata_dict(metadata_vocab_map: dict, only_piano: bool = F
                 try:
                     prog_num = int(token.split('=')[1])
                     if prog_num in piano_family_range:
-                        categorized_tokens['Instrument'].append(token)
-                except (ValueError, IndexError): continue
-            elif token.startswith('TimeSig='): categorized_tokens['TimeSig'].append(token)
-            elif token.startswith('Tempo_'): categorized_tokens['Tempo'].append(token)
+                        instrument_pool.append(token)
+                except (ValueError, IndexError):
+                    continue
     else:
-        for token in metadata_vocab_map.keys():
-            if token.startswith('Instrument='): categorized_tokens['Instrument'].append(token)
-            elif token.startswith('TimeSig='): categorized_tokens['TimeSig'].append(token)
-            elif token.startswith('Tempo_'): categorized_tokens['Tempo'].append(token)
+        instrument_pool = [t for t in metadata_vocab_map.keys() if t.startswith('Instrument=')]
+
+    timesig_pool = [t for t in metadata_vocab_map.keys() if t.startswith('TimeSig=')]
+    tempo_pool = [t for t in metadata_vocab_map.keys() if t.startswith('Tempo_')]
+
     prompt_dict = {}
-    if categorized_tokens['Instrument']:
-        num_instruments = 1
-        if len(categorized_tokens['Instrument']) > 0:
-            chosen_instrument_tokens = random.sample(categorized_tokens['Instrument'], k=min(num_instruments, len(categorized_tokens['Instrument'])))
-            instrument_names = [tok.split('=')[1].replace('_', ' ') for tok in chosen_instrument_tokens]
-            prompt_dict['midi_instruments'] = instrument_names
-    if categorized_tokens['TimeSig']: prompt_dict['time_signature'] = random.choice(categorized_tokens['TimeSig']).split('=')[1]
-    if categorized_tokens['Tempo']: prompt_dict['bpm'] = random.choice(categorized_tokens['Tempo']).split('_')[1]
+
+    # --- 2. Scegli i valori, usando un default se la lista è vuota ---
+
+    # Scelta dello strumento
+    if instrument_pool:
+        chosen_instrument_tokens = random.sample(instrument_pool, k=min(1, len(instrument_pool)))
+        instrument_names = [tok.split('=')[1].replace('_', ' ') for tok in chosen_instrument_tokens]
+        prompt_dict['midi_instruments'] = instrument_names
+    else:
+        # Fallback a un default se nessun strumento è disponibile (es. con --only_piano e vocabolario senza piani)
+        logging.warning("Nessun token strumento valido trovato, uso 'Piano' come default.")
+        prompt_dict['midi_instruments'] = ['0'] # Programma 0: Acoustic Grand Piano
+
+    # Scelta del Time Signature
+    if timesig_pool:
+        prompt_dict['time_signature'] = random.choice(timesig_pool).split('=')[1]
+    else:
+        # Fallback a un default
+        logging.warning("Nessun token TimeSig valido trovato, uso '4/4' come default.")
+        prompt_dict['time_signature'] = '4/4'
+
+    # Scelta del Tempo (BPM)
+    if tempo_pool:
+        # Estrai solo la parte del nome (es. 'Moderate' da 'Tempo_Moderate')
+        prompt_dict['bpm'] = random.choice(tempo_pool).split('_')[1]
+    else:
+        # Fallback a un default
+        logging.warning("Nessun token Tempo valido trovato, uso 'Moderate' come default.")
+        prompt_dict['bpm'] = 'Moderate'
+        
     return prompt_dict
 
 def analyze_generated_score_for_reward(score) -> dict:
